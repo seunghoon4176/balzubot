@@ -23,6 +23,8 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+#build command: pyinstaller --noconsole --onefile --icon=images/cashbot.ico main.py
+
 CONFIG_FILE = "config.json"
 LOCAL_VERSION = "1.0.0"  # 현재 프로그램 버전
 VERSION_URL = "https://seunghoon4176.github.io/balzubot/version.json"
