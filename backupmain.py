@@ -23,8 +23,6 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from order_processor import process_order_zip
-
 #build command: pyinstaller --noconsole --onefile --icon=images/cashbot.ico main.py
 
 CONFIG_FILE = "config.json"
@@ -203,7 +201,7 @@ class OrderApp(QMainWindow):
         # ─── 5) 일괄 처리 / 주문서 생성 버튼 ─────────────────────────────────
         h5 = QHBoxLayout()
         self.btn_batch = QPushButton("일괄 처리")
-        self.btn_batch.clicked.connect(self.run_batch_pipeline)
+        self.btn_batch.clicked.connect(self.first_phase)
         self.btn_batch.setEnabled(False)
 
         self.btn_generate = QPushButton("주문서 생성")
@@ -267,12 +265,6 @@ class OrderApp(QMainWindow):
         self.btn_batch.clicked.connect(self.first_phase)
         self.btn_batch.setEnabled(True)
 
-    def run_batch_pipeline(self):
-        """일괄 처리 버튼 눌렀을 때 → 제로페이즈 → 퍼스트페이즈"""
-        success = self.zero_phase()
-        if success:
-            self.first_phase()
-
     def load_config(self):
         """
         config.json에서 coupang_id, coupang_pw 값을 읽어온다.
@@ -328,21 +320,6 @@ class OrderApp(QMainWindow):
             self.inventory_xlsx_path = path
             self.le_inventory.setText(path)
 
-    def zero_phase(self) -> bool:
-        try:
-            result = process_order_zip(self.order_zip_path)
-            if result["failures"]:
-                QMessageBox.warning(
-                    self, "주의", "일부 파일 처리 실패:\n" + "\n".join(result["failures"])
-                )
-            else:
-                QMessageBox.information(self, "완료", "ZIP 파일 처리 및 엑셀 생성 완료")
-            return True
-        except Exception as e:
-            #QMessageBox.critical(self, "에러", f"ZIP 처리 중 오류:\n{str(e)}")
-            print(self, "에러", f"ZIP 처리 중 오류:\n{str(e)}")
-            return False
-    
     def first_phase(self):
         """
         1) ZIP 해제 및 발주 데이터 파싱
@@ -425,14 +402,11 @@ class OrderApp(QMainWindow):
                 df_items.columns = df_items.columns.str.strip()
 
                 print(f"파일: {os.path.basename(xlsx)} 아이템 헤더: {df_items.columns.tolist()}")
-                
-                """
                 QMessageBox.information(
                     self, "아이템 헤더 확인",
                     f"파일: {os.path.basename(xlsx)}\n"
                     f"아이템 테이블 헤더: {df_items.columns.tolist()}"
                 )
-                """
 
                 # “상품코드” 칼럼, “상품명/옵션/BARCODE” 칼럼 찾아두기
                 col_product = next((c for c in df_items.columns if "상품코드" in c or "품번" in c), None)
