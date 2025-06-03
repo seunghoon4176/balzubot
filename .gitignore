@@ -1,0 +1,20 @@
+# Python 관련
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 가상환경 폴더
+venv/
+env/
+
+# IDE 설정
+.vscode/
+.idea/
+
+# OS 관련
+.DS_Store
+Thumbs.db
+
+# 민감 정보
+config.json
