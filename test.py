@@ -5,10 +5,8 @@ import zipfile
 import tempfile
 import random
 import threading
-import shutil
 from datetime import datetime
 import requests
-import time
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
@@ -25,38 +23,17 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from order_processor import process_order_zip
-
-#build command: pyinstaller --noconsole --onefile --icon=images/cashbot.ico main.py
-
 CONFIG_FILE = "config.json"
-LOCAL_VERSION = "1.0.0"  # 현재 프로그램 버전
-VERSION_URL = "https://seunghoon4176.github.io/balzubot/version.json"
 
-def check_version_or_exit():
-    try:
-        response = requests.get(VERSION_URL, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            remote_version = data.get("version", "")
-            if remote_version != LOCAL_VERSION:
-                QMessageBox.critical(None, "버전 오류", f"현재 버전({LOCAL_VERSION})은 사용할 수 없습니다.\n최신 버전({remote_version})으로 업데이트해주세요.")
-                sys.exit(1)
-        else:
-            QMessageBox.critical(None, "버전 확인 실패", "버전 정보를 불러오지 못했습니다.")
-            sys.exit(1)
-    except Exception as e:
-        QMessageBox.critical(None, "버전 확인 오류", f"버전 확인 중 오류 발생:\n{str(e)}")
-        sys.exit(1)
 
 class SettingsDialog(QDialog):
     """
-    쿠팡 로그인용 아이디/비밀번호와 브랜드명을 입력하고 저장하는 다이얼로그
+    쿠팡 로그인용 아이디/비밀번호를 입력하고 저장하는 다이얼로그
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("로그인 설정")
-        self.setFixedSize(300, 200)
+        self.setFixedSize(300, 150)
 
         layout = QFormLayout(self)
 
@@ -69,15 +46,12 @@ class SettingsDialog(QDialog):
         self.le_pw.setEchoMode(QLineEdit.Password)
         layout.addRow("쿠팡 비밀번호:", self.le_pw)
 
-        # 브랜드명 입력
-        self.le_brand = QLineEdit()
-        layout.addRow("브랜드명:", self.le_brand)
-
         # 저장 버튼
         btn_save = QPushButton("저장")
         btn_save.clicked.connect(self.save_credentials)
         layout.addWidget(btn_save)
 
+        # 기존에 저장된 값 불러오기
         self.load_credentials()
 
     def load_credentials(self):
@@ -90,31 +64,27 @@ class SettingsDialog(QDialog):
                     data = json.load(f)
                 self.le_id.setText(data.get("coupang_id", ""))
                 self.le_pw.setText(data.get("coupang_pw", ""))
-                self.le_brand.setText(data.get("brand_name", ""))
             except:
                 pass
 
     def save_credentials(self):
         """
-        현재 입력된 값을 config.json에 저장
+        현재 입력된 아이디/비밀번호를 config.json에 저장
         """
         coupang_id = self.le_id.text().strip()
         coupang_pw = self.le_pw.text().strip()
-        brand_name = self.le_brand.text().strip()
-
         if not coupang_id or not coupang_pw:
             QMessageBox.warning(self, "경고", "아이디와 비밀번호를 모두 입력해주세요.")
             return
 
         data = {
             "coupang_id": coupang_id,
-            "coupang_pw": coupang_pw,
-            "brand_name": brand_name
+            "coupang_pw": coupang_pw
         }
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "저장 완료", "설정이 저장되었습니다.")
+            QMessageBox.information(self, "저장 완료", "아이디/비밀번호가 저장되었습니다.")
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, "오류", f"저장 중 오류가 발생했습니다:\n{str(e)}")
@@ -212,7 +182,7 @@ class OrderApp(QMainWindow):
         # ─── 5) 일괄 처리 / 주문서 생성 버튼 ─────────────────────────────────
         h5 = QHBoxLayout()
         self.btn_batch = QPushButton("일괄 처리")
-        self.btn_batch.clicked.connect(self.run_batch_pipeline)
+        self.btn_batch.clicked.connect(self.first_phase)
         self.btn_batch.setEnabled(False)
 
         self.btn_generate = QPushButton("주문서 생성")
@@ -276,15 +246,9 @@ class OrderApp(QMainWindow):
         self.btn_batch.clicked.connect(self.first_phase)
         self.btn_batch.setEnabled(True)
 
-    def run_batch_pipeline(self):
-        """일괄 처리 버튼 눌렀을 때 → 제로페이즈 → 퍼스트페이즈"""
-        success = self.zero_phase()
-        if success:
-            self.first_phase()
-
     def load_config(self):
         """
-        config.json에서 coupang_id, coupang_pw, brand_name 값을 읽어온다.
+        config.json에서 coupang_id, coupang_pw 값을 읽어온다.
         """
         if os.path.exists(CONFIG_FILE):
             try:
@@ -292,16 +256,12 @@ class OrderApp(QMainWindow):
                     data = json.load(f)
                 self.coupang_id = data.get("coupang_id", "")
                 self.coupang_pw = data.get("coupang_pw", "")
-                self.brand_name = data.get("brand_name", "")
-                self.le_brand.setText(self.brand_name)
             except:
                 self.coupang_id = ""
                 self.coupang_pw = ""
-                self.brand_name = ""
         else:
             self.coupang_id = ""
             self.coupang_pw = ""
-            self.brand_name = ""
 
     def open_settings_dialog(self):
         """
@@ -341,21 +301,6 @@ class OrderApp(QMainWindow):
             self.inventory_xlsx_path = path
             self.le_inventory.setText(path)
 
-    def zero_phase(self) -> bool:
-        try:
-            result = process_order_zip(self.order_zip_path)
-            if result["failures"]:
-                QMessageBox.warning(
-                    self, "주의", "일부 파일 처리 실패:\n" + "\n".join(result["failures"])
-                )
-            else:
-                QMessageBox.information(self, "완료", "ZIP 파일 처리 및 엑셀 생성 완료")
-            return True
-        except Exception as e:
-            #QMessageBox.critical(self, "에러", f"ZIP 처리 중 오류:\n{str(e)}")
-            print(self, "에러", f"ZIP 처리 중 오류:\n{str(e)}")
-            return False
-    
     def first_phase(self):
         """
         1) ZIP 해제 및 발주 데이터 파싱
@@ -438,14 +383,11 @@ class OrderApp(QMainWindow):
                 df_items.columns = df_items.columns.str.strip()
 
                 print(f"파일: {os.path.basename(xlsx)} 아이템 헤더: {df_items.columns.tolist()}")
-                
-                """
                 QMessageBox.information(
                     self, "아이템 헤더 확인",
                     f"파일: {os.path.basename(xlsx)}\n"
                     f"아이템 테이블 헤더: {df_items.columns.tolist()}"
                 )
-                """
 
                 # “상품코드” 칼럼, “상품명/옵션/BARCODE” 칼럼 찾아두기
                 col_product = next((c for c in df_items.columns if "상품코드" in c or "품번" in c), None)
@@ -587,21 +529,14 @@ class OrderApp(QMainWindow):
 
     def crawl_and_generate(self):
         """
-        실제 크롤링 및 엑셀 생성 로직을 수행한 뒤,
-        성공 시 crawlFinished.emit(msg), 실패 시 crawlError.emit(errmsg)
+        실제 크롤링 및 엑셀 생성 로직을 수행한 뒤、
+        성공 시 crawlFinished.emit(msg)、실패 시 crawlError.emit(errmsg)
         """
         try:
-            from selenium.webdriver.common.by import By
-            from selenium.webdriver.support.ui import WebDriverWait
-            from selenium.webdriver.support import expected_conditions as EC
-            import os
-            import time
-            import shutil
-            import getpass
-
             driver = self.driver
             self.progressUpdated.emit(30)
 
+            # ─── A) 로그인 후 메뉴 클릭: “Logistics” 클릭 → “Shipments” 클릭 ───────────
             try:
                 btn_logistics = WebDriverWait(driver, 15).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='/logistics']"))
@@ -612,95 +547,100 @@ class OrderApp(QMainWindow):
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='/ibs/asn/active']"))
                 )
                 btn_shipments.click()
+                print("메뉴 클릭 완료: Logistics → Shipments")
             except Exception:
-                raise Exception("메뉴 클릭 실패 (Logistics → Shipments)")
+                raise Exception("메뉴(‘Logistics’ → ‘Shipments’) 클릭에 실패했습니다。\n셀렉터를 확인하세요。")
 
+            # ─── B) 발주번호 입력창이 뜰 때까지 대기 (최대 15초) ─────────────────────────
+            print("발주번호 입력창 찾기 전")
             try:
                 search_input = WebDriverWait(driver, 15).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "input#purchaseOrderSeq"))
                 )
+                print("발주번호 입력창 발견")
             except:
-                raise Exception("발주번호 입력창을 찾지 못했습니다.")
+                raise Exception("발주번호 입력창을 찾지 못했습니다。\nCSS 셀렉터를 확인하세요。")
 
-            download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-            local_dir = os.path.join(os.getcwd(), "downloads")
-            os.makedirs(local_dir, exist_ok=True)
-            dir1 = os.path.join(local_dir, "LABEL")
-            dir2 = os.path.join(local_dir, "MANIFEST")
-            os.makedirs(dir1, exist_ok=True)
-            os.makedirs(dir2, exist_ok=True)
-
+            # ─── C) 발주번호별 쉬먼트 번호 크롤링 ─────────────────────────────────────
             total = len(self.orders_data)
             for idx, (po_no, info) in enumerate(self.orders_data.items()):
+                # 1) 발주번호 입력
                 search_input.clear()
                 search_input.send_keys(po_no)
+                print(f"발주번호 입력: {po_no}")
 
+                # 2) “검색” 버튼 클릭
                 try:
                     btn_search = driver.find_element(By.CSS_SELECTOR, "button#shipment-search-btn")
                     btn_search.click()
+                    print("검색 버튼 클릭")
                 except:
-                    raise Exception("검색 버튼 클릭 실패")
+                    raise Exception("검색 버튼(button#shipment-search-btn)을 찾거나 클릭하지 못했습니다。")
 
+                # 3) 결과 테이블에서 첫 번째 쉬먼트 번호 추출
                 try:
                     first_td = WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "table#parcel-tab tbody tr:first-child td:first-child"))
+                        EC.presence_of_element_located((
+                            By.CSS_SELECTOR,
+                            "table#parcel-tab tbody tr:first-child td:first-child"
+                        ))
                     )
                     shipment_no = first_td.text.strip() if first_td.text else ""
+                    print(f"쉬먼트 번호 추출: {shipment_no}")
                 except:
                     shipment_no = ""
+                    print("조회 결과 없음, 쉬먼트 번호 빈 문자열 처리")
 
+                # 4) 캐싱 및 저장
                 center = info["center"]
                 eta = info["eta"]
                 key = f"{center}|{eta.strftime('%Y-%m-%d') if eta else ''}"
                 self.cached_shipment[key] = shipment_no
                 self.orders_data[po_no]["shipment"] = shipment_no or ""
 
-                try:
-                    if shipment_no:
-                        driver.execute_script(f"window.open('https://supplier.coupang.com/ibs/shipment/parcel/pdf-label/generate?parcelShipmentSeq={shipment_no}', '_blank');")
-                        time.sleep(1.5)
-                        driver.execute_script(f"window.open('https://supplier.coupang.com/ibs/shipment/parcel/pdf-manifest/generate?parcelShipmentSeq={shipment_no}', '_blank');")
-                        time.sleep(1.5)
-                except Exception as e:
-                    print("파일 다운로드 오류:", e)
-
                 percent = 30 + int((idx + 1) / total * 40)
                 self.progressUpdated.emit(percent)
 
-            # 모든 다운로드 후 파일 정리
-            time.sleep(5)
-
-            for f in os.listdir(download_dir):
-                path = os.path.join(download_dir, f)
-                if os.path.isfile(path):
-                    lower_f = f.lower()
-                    if lower_f.startswith("shipment_label_document"):
-                        shutil.move(path, os.path.join(dir1, f))
-                    elif lower_f.startswith("shipment_manifest_document"):
-                        shutil.move(path, os.path.join(dir2, f))
-
+            # ─── D) 브라우저 닫기 ────────────────────────────────────────────────
             driver.quit()
             self.driver = None
+            print("브라우저 종료")
 
+            # ─── E) 발주확정 엑셀 생성 ───────────────────────────────────────────
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "발주확정"
+            headers = [
+                "발주번호", "바코드", "상품코드", "센터명",
+                "입고예정일", "쉬먼트번호", "송장번호"
+            ]
+            ws.append(headers)
+
+            for idx, (po_no, info) in enumerate(self.orders_data.items()):
+                row = [
+                    po_no or "",
+                    info["barcode"] or "",
+                    info["product_code"] or "",
+                    info["center"] or "",
+                    info["eta"].strftime("%Y-%m-%d") if info["eta"] else "",
+                    info["shipment"] or "",
+                    info["invoice"] or ""
+                ]
+                ws.append(row)
+                percent = 70 + int((idx + 1) / total * 30)
+                self.progressUpdated.emit(percent)
+
+            save_name = f"발주확정_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            wb.save(save_name)
+            print(f"발주확정 파일 생성: {save_name}")
+
+            # 완료 메시지를 메인 스레드로 전달
             self.progressUpdated.emit(100)
-            self.crawlFinished.emit("발주확정 파일이 생성되었습니다.")
+            self.crawlFinished.emit(f"발주확정 파일이 생성되었습니다：\n{save_name}")
 
         except Exception as e:
-            print("crawl_and_generate 예제 발생:", e)
+            print("crawl_and_generate 예외 발생:", e)
             self.crawlError.emit(str(e))
-
-    def wait_for_new_file(self, download_dir, before_files):
-        for _ in range(30):
-            time.sleep(0.5)
-            after_files = set(os.listdir(download_dir))
-            new_files = list(after_files - before_files)
-            if new_files:
-                file_path = os.path.join(download_dir, new_files[0])
-                if not file_path.endswith(".crdownload"):
-                    return file_path
-        raise Exception("다운로드된 새 파일을 찾을 수 없습니다.")
-
-
 
     def generate_orders(self):
         """
@@ -801,7 +741,6 @@ class OrderApp(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    check_version_or_exit()
     window = OrderApp()
     window.show()
     sys.exit(app.exec())
