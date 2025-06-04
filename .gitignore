@@ -34,3 +34,6 @@ config.json
 # 기타: 캐시, 임시파일
 *.log
 *.tmp
+
+*.pdf
+*.xlsx
