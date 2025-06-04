@@ -725,7 +725,7 @@ class OrderApp(QMainWindow):
             ws_order.title = "주문서"
             headers_order = [
                 "바코드명", "바코드", "상품코드", "센터명",
-                "쉬먼트번호", "발주번호", "입고예정일", "수량", "브랜드명"
+                "쉽먼트번호", "발주번호", "입고예정일", "수량", "브랜드명"
             ]
             ws_order.append(headers_order)
 
@@ -734,7 +734,7 @@ class OrderApp(QMainWindow):
             ws_3pl = wb_3pl.active
             ws_3pl.title = "3PL신청서"
             headers_3pl = [
-                "쉬먼트번호", "바코드", "SKU(제품명)", "브랜드명",
+                "쉽먼트번호", "바코드", "SKU(제품명)", "브랜드명",
                 "수량", "입고예정일", "센터명"
             ]
             ws_3pl.append(headers_3pl)
