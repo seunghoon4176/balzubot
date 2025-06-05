@@ -697,6 +697,9 @@ class OrderApp(QMainWindow):
                 # (2) 원본은 ./downloads 로 이동
                 shutil.move(src, os.path.join(target_dir, fname))
 
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")          # ① 타임스탬프 생성
+            zip_path = shutil.make_archive(f"downloads_{ts}", "zip", target_dir) 
+
             # ── 6) 마무리 ────────────────────────────────────────────────
             driver.quit()
             self.driver = None
