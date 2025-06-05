@@ -620,7 +620,7 @@ class OrderApp(QMainWindow):
             download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
 
             # 모든 PDF·엑셀을 한곳에 모을 최종 폴더
-            target_dir = os.path.join(os.getcwd(), "downloads")
+            target_dir = os.path.join(os.getcwd(), "shipment")
             os.makedirs(target_dir, exist_ok=True)
 
             # ── 4) 주문별 라벨·매니페스트 다운로드 ──────────────────────────
@@ -694,11 +694,15 @@ class OrderApp(QMainWindow):
                         pass
                     continue
 
-                # (2) 원본은 ./downloads 로 이동
+                # (2) 원본은 ./shipment 로 이동
                 shutil.move(src, os.path.join(target_dir, fname))
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")          # ① 타임스탬프 생성
-            zip_path = shutil.make_archive(f"downloads_{ts}", "zip", target_dir) 
+            zip_path = shutil.make_archive(f"shipment_{ts}", "zip", target_dir) 
+            try:
+                shutil.rmtree(target_dir)
+            except Exception as e_del:
+                print(f"[경고] shipment 폴더 삭제 실패: {e_del}")
 
             # ── 6) 마무리 ────────────────────────────────────────────────
             driver.quit()
