@@ -594,6 +594,8 @@ class OrderApp(QMainWindow):
             driver = self.driver
             self.progressUpdated.emit(30)
 
+            driver.get("https://supplier.coupang.com/dashboard/KR")
+
             # ── 1) Logistics → Shipments 메뉴 진입 ────────────────────────
             try:
                 btn_logistics = WebDriverWait(driver, 15).until(
