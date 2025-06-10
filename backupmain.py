@@ -594,6 +594,8 @@ class OrderApp(QMainWindow):
             driver = self.driver
             self.progressUpdated.emit(30)
 
+            driver.get("https://supplier.coupang.com/dashboard/KR")
+
             # ── 1) Logistics → Shipments 메뉴 진입 ────────────────────────
             try:
                 btn_logistics = WebDriverWait(driver, 15).until(
@@ -722,18 +724,18 @@ class OrderApp(QMainWindow):
         ‘사용된 재고’를 누적 관리해 정확히 차감합니다.
         """
         try:
-            # ── (1) 재고 파일 읽기 ────────────────────────────────────────────
+            # ── (1) 재고 파일 읽기 ───────────────────────────────────
             inv_df = (
                 pd.read_excel(self.inventory_xlsx_path, dtype=str)
                 .fillna("")
             )
             inventory_dict = {
-                str(row["바코드"]).strip(): int(float(row.get("수량", 0) or 0))
-                for _, row in inv_df.iterrows()
-                if str(row.get("바코드", "")).strip()
+                str(r["바코드"]).strip(): int(float(r.get("수량", 0) or 0))
+                for _, r in inv_df.iterrows()
+                if str(r.get("바코드", "")).strip()
             }
 
-            # ── (2) 발주확정 엑셀 읽기  ───────────────────────────────────────
+            # ── (2) 발주확정 엑셀 읽기 ────────────────────────────────
             confirm_path = os.path.join(os.getcwd(), "발주 확정 양식.xlsx")
             df_confirm = (
                 pd.read_excel(confirm_path, dtype=str)
@@ -745,11 +747,15 @@ class OrderApp(QMainWindow):
                 .astype(int)
             )
 
-            # self.orders_data 를 이용해 Shipment 번호 매핑
+            # ① Shipment 매핑
             df_confirm["Shipment"] = df_confirm["발주번호"].map(
                 lambda x: self.orders_data.get(str(x).strip(), {}).get("shipment", "")
             )
 
+            # ② 더미 행 제거(확정수량 0)
+            df_confirm = df_confirm[df_confirm["확정수량"] > 0]
+
+            # ③ 그룹화
             group_cols = ["Shipment", "상품바코드", "상품이름", "물류센터", "입고예정일"]
             df_group = (
                 df_confirm[group_cols + ["확정수량"]]
@@ -757,83 +763,85 @@ class OrderApp(QMainWindow):
                 .sum()
             )
 
-            # ── (3) 3PL 신청서  ────────────────────────────────────────────────
-            wb_3pl = Workbook()
-            ws_3pl = wb_3pl.active
-            ws_3pl.title = "3PL신청서"
-            ws_3pl.append(
-                ["쉽먼트번호", "바코드", "SKU(제품명)", "브랜드명",
-                "수량", "입고예정일", "센터명"]
-            )
+            # ── (3) 결과 워크북 준비 ──────────────────────────────────
+            wb_3pl, wb_order = Workbook(), Workbook()
+            ws_3pl, ws_order = wb_3pl.active, wb_order.active
+            ws_3pl.title, ws_order.title = "3PL신청서", "주문서"
 
-            # ── (4) 주문서  ───────────────────────────────────────────────────
-            wb_order = Workbook()
-            ws_order = wb_order.active
-            ws_order.title = "주문서"
-            ws_order.append(
-                ["바코드명", "바코드", "상품코드", "센터명",
-                "쉽먼트번호", "발주번호", "입고예정일", "수량", "브랜드명"]
-            )
+            # (a) 3PL 신청서 헤더 – 공란 열 3개
+            header_3pl = [
+                "브랜드명", "쉽먼트번호", "공란", "공란",
+                "SKU(제품명)", "바코드", "수량", "공란",
+                "입고예정일", "센터명"
+            ]
+            ws_3pl.append(header_3pl)
 
-            used_stock = {}          # 바코드별 누적 사용량
-            brand      = self.le_brand.text().strip()
+            # (b) 주문서 헤더
+            ws_order.append([
+                "바코드명", "바코드", "상품코드", "센터명",
+                "쉽먼트번호", "발주번호", "입고예정일", "수량", "브랜드명"
+            ])
 
-            for _, row in df_group.iterrows():
-                bc          = str(row["상품바코드"]).strip()
-                pname       = str(row["상품이름"]).strip()
-                center      = str(row["물류센터"]).strip()
-                shipment_no = row["Shipment"]
-                eta_raw     = row["입고예정일"]
+            # ── (4) 행 쓰기 ─────────────────────────────────────────
+            used_stock, brand = {}, self.le_brand.text().strip()
+
+            for _, r in df_group.iterrows():
+                bc       = str(r["상품바코드"]).strip()
+                pname    = str(r["상품이름"]).strip()
+                center   = str(r["물류센터"]).strip()
+                ship_no  = r["Shipment"]
+                eta_raw  = r["입고예정일"]
 
                 try:
                     eta_str = pd.to_datetime(eta_raw).strftime("%Y-%m-%d")
                 except Exception:
                     eta_str = ""
 
-                confirmed_qty = int(row["확정수량"])
+                qty = int(r["확정수량"])
 
-                # 이미 사용한 재고를 고려한 현재 가용 재고
-                already_used   = used_stock.get(bc, 0)
-                available_now  = inventory_dict.get(bc, 0) - already_used
-                need_qty       = confirmed_qty - max(available_now, 0)
-
-                # 3PL 신청서는 confirmed 수량 그대로
+                # ── 3PL 신청서 (템플릿 순서 그대로) ──
                 ws_3pl.append([
-                    shipment_no, bc, pname, brand,
-                    confirmed_qty, eta_str, center
+                    brand,          # 0
+                    ship_no,        # 1
+                    "", "",         # 2,3  공란
+                    pname,          # 4
+                    bc,             # 5
+                    qty,            # 6
+                    "",             # 7  공란
+                    eta_str,        # 8
+                    center          # 9
                 ])
 
-                # 주문서: 부족분만 기록
+                # ── 주문서(부족분만) ──
+                already_used  = used_stock.get(bc, 0)
+                avail_now     = inventory_dict.get(bc, 0) - already_used
+                need_qty      = max(qty - max(avail_now, 0), 0)
+
                 if need_qty > 0:
-                    # 상품코드·발주번호는 첫 매칭 행의 값 사용
                     mask = (
-                        (df_confirm["Shipment"]   == shipment_no) &
+                        (df_confirm["Shipment"] == ship_no) &
                         (df_confirm["상품바코드"] == bc)
                     )
-                    product_code = ""
-                    po_no        = ""
+                    product_code = po_no = ""
                     if mask.any():
                         product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
                         po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
 
                     ws_order.append([
                         pname, bc, product_code, center,
-                        shipment_no, po_no, eta_str, need_qty, brand
+                        ship_no, po_no, eta_str, need_qty, brand
                     ])
 
-                # 누적 사용량 갱신
-                used_stock[bc] = already_used + min(confirmed_qty, max(available_now, 0))
+                used_stock[bc] = already_used + min(qty, max(avail_now, 0))
 
-            # ── (5) 저장 & 알림  ──────────────────────────────────────────────
+            # ── (5) 저장 ────────────────────────────────────────────
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            f_3pl   = f"3PL신청서_{ts}.xlsx"
-            f_order = f"주문서_{ts}.xlsx"
-            wb_3pl.save(f_3pl)
-            wb_order.save(f_order)
+            wb_3pl.save(f"3PL신청서_{ts}.xlsx")
+            wb_order.save(f"주문서_{ts}.xlsx")
 
             QMessageBox.information(
                 self, "완료",
-                f"3PL 신청서와 주문서를 생성했습니다:\n- {f_3pl}\n- {f_order}"
+                f"3PL 신청서와 주문서를 생성했습니다:\n- 3PL신청서_{ts}.xlsx\n- 주문서_{ts}.xlsx"
             )
 
         except Exception as e:
