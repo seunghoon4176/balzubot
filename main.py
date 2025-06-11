@@ -33,6 +33,28 @@ CONFIG_FILE = "config.json"
 LOCAL_VERSION = "1.0.0"  # 현재 프로그램 버전
 VERSION_URL = "https://seunghoon4176.github.io/balzubot/version.json"
 
+def is_confirmed_excel(path: str) -> bool:
+    """
+    • 헤더가 17~20행 어디에 있더라도 '입고금액' 컬럼이 보이면 확정본으로 간주
+    • 시트가 여러 개인 경우도 모두 검사
+    """
+    try:
+        # 시트 이름 목록
+        xls = pd.ExcelFile(path)
+        for sheet in xls.sheet_names:
+            for hdr in (16, 17, 18, 19):   # pandas header= 는 0-based
+                try:
+                    cols = pd.read_excel(xls, sheet_name=sheet,
+                                         header=hdr, nrows=0).columns
+                    if any("입고금액" in str(c) for c in cols):
+                        return True
+                except Exception:
+                    # 행 오버플로·빈 시트 등은 무시하고 다음 조합 시도
+                    continue
+        return False
+    except Exception:
+        # 파일 자체가 깨졌다면 '미확정'으로 처리(아래 로직에서 다시 예외 발생)
+        return False
 
 def check_version_or_exit():
     try:
@@ -392,10 +414,14 @@ class OrderApp(QMainWindow):
                         target.write(source.read())
 
                     if real_name.lower().endswith((".xls", ".xlsx")):
+                        if is_confirmed_excel(target_path):
+                            print(f"[SKIP] 확정본이어서 건너뜀 → {real_name}")
+                            continue           # ★ excel_files에 넣지 않음
                         excel_files.append(target_path)
 
             if not excel_files:
-                raise Exception("ZIP 내부에 Excel 파일이 없습니다。")
+                QMessageBox.information(self, "안내", "미확정 발주서가 없습니다.")
+                return
 
             self.orders_data.clear()
             self.cached_shipment.clear()
