@@ -10,7 +10,28 @@ import pandas as pd
 from openpyxl import load_workbook, Workbook
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
+import pandas as pd
+import time
 
+def is_confirmed_excel(path: str) -> bool:
+    """
+    확정본 판정:
+      • 헤더 15~22행(0-based 14~21) 중 하나에서 '입고금액' 컬럼이 발견될 때만 True
+    """
+    import pandas as pd, contextlib
+    try:
+        with pd.ExcelFile(path) as xls:
+            for sheet in xls.sheet_names:
+                for hdr in range(14, 22):
+                    with contextlib.suppress(Exception):
+                        cols = pd.read_excel(
+                            xls, sheet_name=sheet, header=hdr, nrows=0
+                        ).columns
+                        if any("입고금액" in str(c) for c in cols):
+                            return True
+    except Exception:
+        pass
+    return False
 
 def round_to_hundred(x: float) -> int:
     return int(Decimal(x).quantize(Decimal('1E2'), rounding=ROUND_HALF_UP))
@@ -46,35 +67,60 @@ def restore_korean(name: str) -> str:
 
 def unzip_orders(zip_path: str) -> str:
     """
-    get_output_dir() 하위의 'orders_unzip' 폴더에 ZIP 내부의 엑셀 파일들을 풀어둡니다.
+    ZIP → get_output_dir()/orders_unzip 폴더로 풀어 둔다.
+    ─ 확정본(입고금액 컬럼 있는 엑셀)은 즉시 삭제한다.
+    ─ 같은 이름 파일이 여럿이면 _1, _2… 식으로 중복 회피.
+    반환값: 실제로 unzip 된 폴더 경로(= orders_unzip)
     """
-    out_dir = get_output_dir()
-    dst = os.path.join(out_dir, "orders_unzip")
-    if os.path.isdir(dst):
-        shutil.rmtree(dst)
-    os.makedirs(dst, exist_ok=True)
+    out_dir   = get_output_dir()
+    dst_root  = os.path.join(out_dir, "orders_unzip")
+
+    # 기존 폴더 깨끗이 비우기
+    if os.path.isdir(dst_root):
+        shutil.rmtree(dst_root)
+    os.makedirs(dst_root, exist_ok=True)
 
     with zipfile.ZipFile(zip_path) as zf:
-        seen = set()
+        seen_names = set()
+
         for info in zf.infolist():
             if info.is_dir():
                 continue
             if not info.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
                 continue
 
+            # CP437 → CP949 복원 (한글 파일명 깨짐 방지)
             fixed = restore_korean(os.path.basename(info.filename))
-            base, ext = os.path.splitext(fixed)
-            i = 1
-            while fixed in seen:
-                fixed = f"{base}_{i}{ext}"
-                i += 1
-            seen.add(fixed)
 
-            out_path = os.path.join(dst, fixed)
+            # 동일 이름 있을 때 _1, _2… 붙이기
+            base, ext = os.path.splitext(fixed)
+            idx = 1
+            while fixed in seen_names:
+                fixed = f"{base}_{idx}{ext}"
+                idx  += 1
+            seen_names.add(fixed)
+
+            out_path = os.path.join(dst_root, fixed)
             with zf.open(info) as src, open(out_path, "wb") as dst_f:
                 shutil.copyfileobj(src, dst_f)
 
-    return dst
+            # ─── 확정본 판정 → 즉시 삭제 ───────────────────────────
+            if is_confirmed_excel(out_path):
+                print(f"[DEL ] 확정본 → {fixed}")
+                try:
+                    os.remove(out_path)
+                except PermissionError:
+                    # very rare on Windows: 잠시 뒤 재시도
+                    time.sleep(0.1)
+                    try:
+                        os.remove(out_path)
+                    except Exception:
+                        pass
+                continue  # 다음 파일
+
+            print(f"[KEEP] 미확정 → {fixed}")
+
+    return dst_root
 
 
 def parse_orders(unzip_dir: str):

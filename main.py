@@ -25,7 +25,8 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import re  
-from order_processor import process_order_zip
+
+from order_processor import process_order_zip, is_confirmed_excel
 
 # build command: pyinstaller --noconsole --onefile --icon=images/cashbot.ico main.py
 
@@ -33,28 +34,7 @@ CONFIG_FILE = "config.json"
 LOCAL_VERSION = "1.0.0"  # 현재 프로그램 버전
 VERSION_URL = "https://seunghoon4176.github.io/balzubot/version.json"
 
-def is_confirmed_excel(path: str) -> bool:
-    """
-    • 헤더가 17~20행 어디에 있더라도 '입고금액' 컬럼이 보이면 확정본으로 간주
-    • 시트가 여러 개인 경우도 모두 검사
-    """
-    try:
-        # 시트 이름 목록
-        xls = pd.ExcelFile(path)
-        for sheet in xls.sheet_names:
-            for hdr in (16, 17, 18, 19):   # pandas header= 는 0-based
-                try:
-                    cols = pd.read_excel(xls, sheet_name=sheet,
-                                         header=hdr, nrows=0).columns
-                    if any("입고금액" in str(c) for c in cols):
-                        return True
-                except Exception:
-                    # 행 오버플로·빈 시트 등은 무시하고 다음 조합 시도
-                    continue
-        return False
-    except Exception:
-        # 파일 자체가 깨졌다면 '미확정'으로 처리(아래 로직에서 다시 예외 발생)
-        return False
+
 
 def check_version_or_exit():
     try:
@@ -415,8 +395,9 @@ class OrderApp(QMainWindow):
 
                     if real_name.lower().endswith((".xls", ".xlsx")):
                         if is_confirmed_excel(target_path):
-                            print(f"[SKIP] 확정본이어서 건너뜀 → {real_name}")
-                            continue           # ★ excel_files에 넣지 않음
+                            print(f"[DEL ] 확정본 → {real_name}  (임시 사본 삭제)")
+                            os.remove(target_path)          # ★★★ 여기 한 줄 ★★★
+                            continue                        # excel_files 에 추가하지 않음
                         excel_files.append(target_path)
 
             if not excel_files:
@@ -594,6 +575,9 @@ class OrderApp(QMainWindow):
             self.btn_batch.clicked.connect(self.second_phase)
             self.btn_batch.setEnabled(True)
 
+            print("=== orders_data 최종 ===", list(self.orders_data.keys()))
+            print("총 건수:", len(self.orders_data))
+
         except Exception as e:
             print("!!! first_phase 예외 발생：", e)
             self.crawlError.emit(f"초기 처리 중 오류가 발생했습니다：\n{str(e)}")
@@ -767,6 +751,12 @@ class OrderApp(QMainWindow):
                 pd.read_excel(confirm_path, dtype=str)
                 .fillna("")
             )
+            
+            valid_pos = set(self.orders_data.keys())
+            df_confirm = df_confirm[df_confirm["발주번호"].isin(valid_pos)]
+
+            print("=== df_confirm PO ===", df_confirm["발주번호"].unique())
+
             df_confirm["확정수량"] = (
                 pd.to_numeric(df_confirm["확정수량"], errors="coerce")
                 .fillna(0)
