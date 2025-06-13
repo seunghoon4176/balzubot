@@ -8,7 +8,7 @@
 # ──────────────────────────────────────────────────────────────
 import sys, os, json, zipfile, tempfile, random, threading, shutil, time, re
 from datetime import datetime
-
+import openpyxl
 import requests
 import pandas as pd
 from openpyxl import Workbook
@@ -113,6 +113,8 @@ class SettingsDialog(QDialog):
     def _save(self):
         if not self.le_id.text().strip() or not self.le_pw.text().strip():
             QMessageBox.warning(self, "경고", "쿠팡 ID/PW를 입력하세요."); return
+        if not self.le_biz.text().strip():
+            QMessageBox.warning(self, "경고", "사업자번호를 입력하세요."); return
         data = {
             "business_number": self.le_biz.text().strip(), 
             "coupang_id": self.le_id.text().strip(),
@@ -498,7 +500,9 @@ class OrderApp(QMainWindow):
     # ──────────────────────────────────────────────────────────
     def generate_orders(self):
         try:
-            # ① 스프레드시트 재고 → dict
+            import openpyxl  # 원데이 템플릿 읽기에 사용
+
+            # 1️⃣ 스프레드시트 재고 → dict
             inv_df = load_stock_df(self.business_number)
             inventory_dict = {
                 str(r["바코드"]).strip(): int(float(r["수량"] or 0))
@@ -506,21 +510,25 @@ class OrderApp(QMainWindow):
             }
             used_stock: dict[str, int] = {}   # 바코드별 누적 소모량
 
-            # ② 발주확정 엑셀
-            confirm_path = os.path.join(os.getcwd(), "발주 확정 양식.xlsx")
-            df_confirm = pd.read_excel(confirm_path, dtype=str).fillna("")
-            df_confirm["확정수량"] = (
-                pd.to_numeric(df_confirm["확정수량"], errors="coerce")
-                .fillna(0).astype(int)
+            # 2️⃣ 상품정보.xlsx (원데이 주문서에 필요)
+            prod_df = (
+                pd.read_excel(PRODUCT_XLSX, dtype=str, engine="openpyxl")
+                .fillna("")
             )
 
-            # Shipment 번호 매핑
+            # 3️⃣ 발주확정 엑셀
+            confirm_path = os.path.join(os.getcwd(), "발주 확정 양식.xlsx")
+            df_confirm = pd.read_excel(confirm_path, dtype=str, engine="openpyxl").fillna("")
+            df_confirm["확정수량"] = (
+                pd.to_numeric(df_confirm["확정수량"], errors="coerce").fillna(0).astype(int)
+            )
+
             df_confirm["Shipment"] = df_confirm["발주번호"].map(
                 lambda x: self.orders_data.get(str(x).strip(), {}).get("shipment", "")
             )
             df_confirm = df_confirm[df_confirm["확정수량"] > 0]
 
-            # ③ 그룹화(Shipment·바코드 단위)
+            # 4️⃣ 그룹화(Shipment·바코드 단위)
             group_cols = ["Shipment", "상품바코드", "상품이름", "물류센터", "입고예정일"]
             df_group = (
                 df_confirm[group_cols + ["확정수량"]]
@@ -528,7 +536,7 @@ class OrderApp(QMainWindow):
                 .sum()
             )
 
-            # ④ 결과 워크북
+            # 5️⃣ 결과 워크북들
             wb_3pl, wb_order = Workbook(), Workbook()
             ws_3pl, ws_order = wb_3pl.active, wb_order.active
             ws_3pl.title, ws_order.title = "3PL신청서", "주문서"
@@ -543,9 +551,21 @@ class OrderApp(QMainWindow):
                 "입고마감준수여부", "발주 수량", "중국재고사용여부"
             ])
 
+            wb_one = openpyxl.Workbook()
+            ws_one = wb_one.active
+            ws_one.title = "원데이주문서"
+
+            # 헤더(1행) 직접 작성
+            ws_one.append([
+                "상품URL", "단가(위안)", "수량", "색상", "사이즈",
+                "이미지URL", "상품바코드", "상품바코드명", "브랜드명"
+            ])
+
+            row_one = 2   # 데이터는 2행부터
+
             brand = self.le_brand.text().strip()
 
-            # ⑤ 행 작성
+            # 6️⃣ 행 작성
             for _, r in df_group.iterrows():
                 bc       = r["상품바코드"]
                 pname    = r["상품이름"]
@@ -563,35 +583,54 @@ class OrderApp(QMainWindow):
                     po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
                     product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
 
-                # ▶ 3PL 신청서 (확정수량 그대로)
+                # → 3PL 신청서
                 ws_3pl.append([
                     brand, ship_no, po_no, product_code,
                     pname, bc, qty, "", eta_str, center
                 ])
 
-                # ▶ 재고 차감 계산
-                already_used = used_stock.get(bc, 0)
-                avail_now    = inventory_dict.get(bc, 0) - already_used
-                need_qty     = max(qty - max(avail_now, 0), 0)
+                # 재고 차감
+                already = used_stock.get(bc, 0)
+                avail   = inventory_dict.get(bc, 0) - already
+                need    = max(qty - max(avail, 0), 0)
 
-                # ▶ 주문서에 부족분만 기록
-                if need_qty > 0:
+                # → 기존 주문서: 부족분만
+                if need > 0:
                     ws_order.append([
                         pname, bc, product_code, center,
-                        ship_no, eta_str, "Y", need_qty, "N"
+                        ship_no, eta_str, "Y", need, "N"
                     ])
 
-                used_stock[bc] = already_used + min(qty, max(avail_now, 0))
+                # → 원데이 주문서: 부족분만
+                if need > 0:
+                    prod_row = prod_df[prod_df["상품바코드"] == bc]
+                    prod_row = prod_row.iloc[0] if not prod_row.empty else {}
 
-            # ⑥ 저장 및 알림
+                    ws_one.cell(row_one, 1).value = prod_row.get("상품URL", "")          # 중국 사이트
+                    ws_one.cell(row_one, 2).value = prod_row.get("상품단가(위안)", "")
+                    ws_one.cell(row_one, 3).value = need                                # 수량
+                    ws_one.cell(row_one, 4).value = ""                                  # 색상
+                    ws_one.cell(row_one, 5).value = ""                                  # 사이즈
+                    ws_one.cell(row_one, 6).value = prod_row.get("이미지URL", "")
+                    ws_one.cell(row_one, 7).value = bc
+                    ws_one.cell(row_one, 8).value = prod_row.get("상품바코드명", "")
+                    ws_one.cell(row_one, 9).value = brand
+                    row_one += 1
+
+                used_stock[bc] = already + min(qty, max(avail, 0))
+
+            # 7️⃣ 저장 및 알림
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             wb_3pl.save(f"3PL신청서_{ts}.xlsx")
             wb_order.save(f"주문서_{ts}.xlsx")
+            wb_one.save(f"원데이주문서_{ts}.xlsx")
 
             QMessageBox.information(
                 self, "완료",
-                f"3PL 신청서와 주문서를 생성했습니다:\n"
-                f"- 3PL신청서_{ts}.xlsx\n- 주문서_{ts}.xlsx"
+                f"아래 3개 파일을 생성했습니다:\n"
+                f"- 3PL신청서_{ts}.xlsx\n"
+                f"- 주문서_{ts}.xlsx\n"
+                f"- 원데이주문서_{ts}.xlsx"
             )
 
         except Exception as e:
