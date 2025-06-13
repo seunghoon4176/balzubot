@@ -63,7 +63,7 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
 
     df = df[df[biz_col].astype(str).str.strip() == biz_num]
     if df.empty:
-        raise Exception("스프레드시트에 해당 사업자번호 재고가 없습니다.")
+        print("스프레드시트에 해당 사업자번호 재고가 없습니다.")
     return df[[bc_col, qty_col]].rename(
         columns={bc_col: "바코드", qty_col: "수량"}
     )
@@ -344,12 +344,12 @@ class OrderApp(QMainWindow):
             stock_barcodes = set(inv_df["바코드"].astype(str).str.strip())
             missing_stock = [bc for bc in needed_barcodes if bc not in stock_barcodes]
             if missing_stock:
-                QMessageBox.critical(
-                    self, "누락 재고",
-                    "다음 바코드가 재고 스프레드시트에 없습니다:\n" +
-                    "\n".join(missing_stock)
+                print(
+                    self, "재고 미등록",
+                    "다음 바코드는 스프레드시트에 재고가 없습니다.\n"
+                    "주문서에 전량(부족분) 주문으로 반영됩니다:\n"
+                    + "\n".join(missing_stock)
                 )
-                return
             
             # 1-C. Selenium WebDriver 생성 & 로그인
             self.progress.setVisible(True)
@@ -557,7 +557,7 @@ class OrderApp(QMainWindow):
 
             # 헤더(1행) 직접 작성
             ws_one.append([
-                "상품URL", "단가(위안)", "수량", "색상", "사이즈",
+                "상품URL", "단가(위안)", "수량", "색상(옵션1)", "사이즈(옵션2)",
                 "이미지URL", "상품바코드", "상품바코드명", "브랜드명"
             ])
 
@@ -609,8 +609,8 @@ class OrderApp(QMainWindow):
                     ws_one.cell(row_one, 1).value = prod_row.get("상품URL", "")          # 중국 사이트
                     ws_one.cell(row_one, 2).value = prod_row.get("상품단가(위안)", "")
                     ws_one.cell(row_one, 3).value = need                                # 수량
-                    ws_one.cell(row_one, 4).value = ""                                  # 색상
-                    ws_one.cell(row_one, 5).value = ""                                  # 사이즈
+                    ws_one.cell(row_one, 4).value = prod_row.get("상품옵션1(중문)", "")
+                    ws_one.cell(row_one, 5).value = prod_row.get("상품옵션2(중문)", "")    # 사이즈
                     ws_one.cell(row_one, 6).value = prod_row.get("이미지URL", "")
                     ws_one.cell(row_one, 7).value = bc
                     ws_one.cell(row_one, 8).value = prod_row.get("상품바코드명", "")
