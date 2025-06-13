@@ -1,378 +1,223 @@
-import sys
-import os
-import json
-import zipfile
-import tempfile
-import random
-import threading
-import shutil
+# main.py – 2025-06-13 완전판
+# ----------------------------------------------------------
+# · 발주 ZIP → Selenium 크롤링
+# · Google Sheets(재고리스트 탭) 사업자번호=A열 필터 CSV
+# · 재고 차감 + 3PL 신청서 & 부족분 주문서
+# ----------------------------------------------------------
+import sys, os, json, zipfile, tempfile, random, threading, shutil, time, re, io, urllib.parse
 from datetime import datetime
-import requests
-import time
 
+import requests
+import pandas as pd
+from openpyxl import Workbook
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
     QFileDialog, QHBoxLayout, QVBoxLayout, QMessageBox, QProgressBar, QDialog,
     QFormLayout
 )
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QIcon
 
-
-import pandas as pd
-from openpyxl import Workbook
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import re  
 
 from order_processor import process_order_zip, is_confirmed_excel
 
-# build command: pyinstaller --noconsole --onefile --icon=images/cashbot.ico main.py
 
-CONFIG_FILE = "config.json"
-LOCAL_VERSION = "1.0.0"  # 현재 프로그램 버전
-VERSION_URL = "https://seunghoon4176.github.io/balzubot/version.json"
+# ──────────────────────────── 상수
+CONFIG_FILE   = "config.json"
+LOCAL_VERSION = "1.0.0"
+VERSION_URL   = "https://seunghoon4176.github.io/balzubot/version.json"
+
+SPREADSHEET_ID  = "1sYtryUcGjritwwU6IGxc49uGZAIzkICo2QNBVw0kyNo"
+SPREADSHEET_GID = "794212207"       # 재고리스트 탭
+ICON_PATH = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
 
 
+# ──────────────────────────── Google Sheets CSV
+def fetch_inventory_for_biz(biz_no: str) -> pd.DataFrame:
+    """
+    탭 전체 CSV를 받아와 사업자번호 열(A열)에 대해 문자열·공백을
+    무시하고 필터링한 DataFrame 반환.
+    """
+    url = (f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/"
+           f"export?format=csv&gid={SPREADSHEET_GID}")
+    try:
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
 
+        # CSV → DataFrame (UTF-8 BOM 대응)
+        df = pd.read_csv(io.BytesIO(r.content),
+                         dtype=str,
+                         encoding="utf-8-sig").fillna("")
+
+        # A열 찾기: ‘사업자’가 포함된 첫 컬럼
+        biz_col = next((c for c in df.columns if "사업자" in c), None)
+        if biz_col is None:
+            raise Exception("CSV에 '사업자번호' 열이 없습니다.")
+
+        # 문자열로 변환 후 공백 제거 비교
+        mask = df[biz_col].astype(str).str.strip() == str(biz_no).strip()
+        return df[mask].reset_index(drop=True)
+    except Exception as e:
+        print("[WARN] CSV 다운로드/필터 실패:", e)
+        return pd.DataFrame()
+
+
+# ──────────────────────────── 버전 확인
 def check_version_or_exit():
     try:
-        response = requests.get(VERSION_URL, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            remote_version = data.get("version", "")
-            if remote_version != LOCAL_VERSION:
-                QMessageBox.critical(
-                    None,
-                    "버전 오류",
-                    f"현재 버전({LOCAL_VERSION})은 더 이상 사용할 수 없습니다。\n"
-                    f"최신 버전({remote_version})으로 업데이트해주세요。"
-                )
-                sys.exit(1)
-        else:
-            QMessageBox.critical(None, "버전 확인 실패", "버전 정보를 불러오지 못했습니다。")
+        r = requests.get(VERSION_URL, timeout=5)
+        if r.status_code == 200 and r.json().get("version") != LOCAL_VERSION:
+            QMessageBox.critical(None, "버전 만료",
+                                 f"현재 버전({LOCAL_VERSION})은 만료되었습니다.\n"
+                                 "새 버전을 내려받아 주세요.")
             sys.exit(1)
     except Exception as e:
-        QMessageBox.critical(None, "버전 확인 오류", f"버전 확인 중 오류 발생：\n{str(e)}")
-        sys.exit(1)
+        QMessageBox.critical(None, "버전 확인 오류", str(e)); sys.exit(1)
 
 
+# ──────────────────────────── 설정 다이얼로그
 class SettingsDialog(QDialog):
-    """
-    쿠팡 로그인용 아이디/비밀번호와 브랜드명을 입력하고 저장하는 다이얼로그
-    """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("로그인 설정")
-        self.setFixedSize(300, 200)
+        self.setWindowTitle("쿠팡 ID/PW 설정")
+        self.setFixedSize(320, 250)
+        self.setWindowIcon(QIcon(ICON_PATH))
 
-        icon_path = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
-        self.setWindowIcon(QIcon(icon_path))
-        
-        layout = QFormLayout(self)
+        lay = QFormLayout(self)
+        self.le_id   = QLineEdit(); lay.addRow("쿠팡 아이디:", self.le_id)
+        self.le_pw   = QLineEdit(); self.le_pw.setEchoMode(QLineEdit.Password)
+        lay.addRow("쿠팡 비밀번호:", self.le_pw)
+        self.le_brand= QLineEdit(); lay.addRow("브랜드명:", self.le_brand)
+        self.le_biz  = QLineEdit(); lay.addRow("사업자번호:", self.le_biz)
 
-        # 아이디 입력
-        self.le_id = QLineEdit()
-        layout.addRow("쿠팡 아이디:", self.le_id)
+        btn = QPushButton("저장"); btn.clicked.connect(self._save); lay.addWidget(btn)
+        self._load()
 
-        # 비밀번호 입력 (숨김)
-        self.le_pw = QLineEdit()
-        self.le_pw.setEchoMode(QLineEdit.Password)
-        layout.addRow("쿠팡 비밀번호:", self.le_pw)
-
-        # 브랜드명 입력
-        self.le_brand = QLineEdit()
-        layout.addRow("브랜드명:", self.le_brand)
-
-        # 저장 버튼
-        btn_save = QPushButton("저장")
-        btn_save.clicked.connect(self.save_credentials)
-        layout.addWidget(btn_save)
-
-        self.load_credentials()
-
-    def load_credentials(self):
-        """
-        config.json 파일이 있으면 불러와서 입력란에 채워준다.
-        """
+    def _load(self):
         if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self.le_id.setText(data.get("coupang_id", ""))
-                self.le_pw.setText(data.get("coupang_pw", ""))
-                self.le_brand.setText(data.get("brand_name", ""))
-            except:
-                pass
+            with open(CONFIG_FILE,"r",encoding="utf-8") as f:
+                d=json.load(f)
+            self.le_id.setText(d.get("coupang_id",""))
+            self.le_pw.setText(d.get("coupang_pw",""))
+            self.le_brand.setText(d.get("brand_name",""))
+            self.le_biz.setText(d.get("business_number",""))
 
-    def save_credentials(self):
-        """
-        현재 입력된 값을 config.json에 저장
-        """
-        coupang_id = self.le_id.text().strip()
-        coupang_pw = self.le_pw.text().strip()
-        brand_name = self.le_brand.text().strip()
-
-        if not coupang_id or not coupang_pw:
-            QMessageBox.warning(self, "경고", "아이디와 비밀번호를 모두 입력해주세요。")
-            return
-
+    def _save(self):
+        if not self.le_id.text().strip() or not self.le_pw.text().strip():
+            QMessageBox.warning(self,"경고","쿠팡 ID/PW를 입력하세요."); return
         data = {
-            "coupang_id": coupang_id,
-            "coupang_pw": coupang_pw,
-            "brand_name": brand_name
+            "coupang_id": self.le_id.text().strip(),
+            "coupang_pw": self.le_pw.text().strip(),
+            "brand_name": self.le_brand.text().strip(),
+            "business_number": self.le_biz.text().strip()
         }
-        try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "저장 완료", "설정이 저장되었습니다。")
-            self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "오류", f"저장 중 오류가 발생했습니다：\n{str(e)}")
+        with open(CONFIG_FILE,"w",encoding="utf-8") as f:
+            json.dump(data,f,ensure_ascii=False,indent=2)
+        self.accept()
 
 
+# ──────────────────────────── 메인 윈도우
 class OrderApp(QMainWindow):
-    # 크롤링 완료/에러 시그널
-    crawlFinished = Signal(str)
-    crawlError = Signal(str)
+
+    crawlFinished   = Signal(str)
+    crawlError      = Signal(str)
     progressUpdated = Signal(int)
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("수강생 발주 프로그램")
-        self.setFixedSize(650, 300)
+        self.setFixedSize(680, 300)
+        self.setWindowIcon(QIcon(ICON_PATH))
 
-        icon_path = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
-        self.setWindowIcon(QIcon(icon_path))
-
-        # 1) 발주 리스트 ZIP 경로
+        # 설정 값
         self.order_zip_path = None
-        # 2) 재고 리스트 Excel 경로
-        self.inventory_xlsx_path = None
-        # 3) 브랜드명
-        self.brand_name = None
+        self.coupang_id = self.coupang_pw = ""
+        self.brand_name = self.business_number = ""
 
-        # 쿠팡 로그인용 아이디/비밀번호 (config.json에서 불러오기)
-        self.coupang_id = ""
-        self.coupang_pw = ""
+        # 런타임
+        self.orders_data = {}; self.cached_shipment = {}; self.driver = None
 
-        # 발주데이터 저장 구조
-        # { PO번호: {
-        #      "barcode": …,
-        #      "product_code": …,
-        #      "product_name": …,
-        #      "center": …,
-        #      "eta": …,
-        #      "shipment": …,
-        #      "invoice": … (랜덤 10자리 숫자)
-        #   }
-        # }
-        self.orders_data = {}
-        self.cached_shipment = {}  # { "센터|입고일": shipment_no }
+        self._build_ui(); self._load_config()
 
-        # Selenium WebDriver 객체
-        self.driver = None
+        self.progressUpdated.connect(lambda v: self.progress.setValue(v))
+        self.crawlFinished.connect(self._crawl_ok)
+        self.crawlError.connect(self._crawl_err)
 
-        self.init_ui()
-        self.load_config()
+    # ── UI ──────────────────────────────────────────────────────
+    def _build_ui(self):
+        cen=QWidget(); self.setCentralWidget(cen); lay=QVBoxLayout(cen)
 
-        # 시그널 연결
-        self.progressUpdated.connect(self.on_progress_updated)
-        self.crawlFinished.connect(self.on_crawl_finished)
-        self.crawlError.connect(self.on_crawl_error)
+        # ZIP
+        h1=QHBoxLayout(); h1.addWidget(QLabel("발주 ZIP:"))
+        self.le_zip=QLineEdit(); self.le_zip.setReadOnly(True)
+        btn_zip=QPushButton("파일 선택"); btn_zip.clicked.connect(self._pick_zip)
+        h1.addWidget(self.le_zip); h1.addWidget(btn_zip)
 
-    def init_ui(self):
-        central = QWidget()
-        layout = QVBoxLayout()
+        # 브랜드
+        h2=QHBoxLayout(); h2.addWidget(QLabel("브랜드명:"))
+        self.le_brand=QLineEdit(); h2.addWidget(self.le_brand)
 
-        # ─── 1) 발주 리스트 ZIP 선택 ───────────────────────────────────────
-        h1 = QHBoxLayout()
-        lbl1 = QLabel("1) 발주 리스트 ZIP:")
-        self.le_zip = QLineEdit()
-        self.le_zip.setReadOnly(True)
-        btn_zip = QPushButton("파일 선택")
-        btn_zip.clicked.connect(self.select_order_zip)
-        h1.addWidget(lbl1)
-        h1.addWidget(self.le_zip)
-        h1.addWidget(btn_zip)
+        # 설정
+        h3=QHBoxLayout(); h3.addStretch()
+        btn_set=QPushButton("쿠팡 ID/PW 설정"); btn_set.clicked.connect(self._open_settings)
+        h3.addWidget(btn_set)
 
-        # ─── 2) 재고 리스트(Excel) 선택 ────────────────────────────────────
-        h2 = QHBoxLayout()
-        lbl2 = QLabel("2) 재고 리스트(Excel):")
-        self.le_inventory = QLineEdit()
-        self.le_inventory.setReadOnly(True)
-        btn_inventory = QPushButton("파일 선택")
-        btn_inventory.clicked.connect(self.select_inventory_xlsx)
-        h2.addWidget(lbl2)
-        h2.addWidget(self.le_inventory)
-        h2.addWidget(btn_inventory)
+        # 실행
+        h4=QHBoxLayout()
+        self.btn_run=QPushButton("일괄 처리"); self.btn_run.clicked.connect(self._run_pipeline)
+        self.btn_run.setEnabled(False); h4.addWidget(self.btn_run)
+        self.btn_batch = self.btn_run          # ★ 호환용 별칭
 
-        # ─── 3) 브랜드명 입력 ─────────────────────────────────────────────
-        h3 = QHBoxLayout()
-        lbl3 = QLabel("3) 브랜드명:")
-        self.le_brand = QLineEdit()
-        h3.addWidget(lbl3)
-        h3.addWidget(self.le_brand)
+        # progress
+        self.progress=QProgressBar(); self.progress.setRange(0,100); self.progress.setVisible(False)
 
-        # ─── 4) 로그인 설정 버튼 ───────────────────────────────────────────
-        h4 = QHBoxLayout()
-        lbl4 = QLabel("")
-        btn_settings = QPushButton("설정")
-        btn_settings.clicked.connect(self.open_settings_dialog)
-        h4.addWidget(lbl4)
-        h4.addWidget(btn_settings)
-        h4.addStretch()
+        for h in (h1,h2,h3,h4): lay.addLayout(h)
+        lay.addWidget(self.progress)
 
-        # ─── 5) 일괄 처리 버튼 ─────────────────────────────────────────────
-        h5 = QHBoxLayout()
-        self.btn_batch = QPushButton("일괄 처리")
-        self.btn_batch.clicked.connect(self.run_batch_pipeline)
-        self.btn_batch.setEnabled(False)
-        h5.addWidget(self.btn_batch)
+        for w in (self.le_zip, self.le_brand): w.textChanged.connect(self._enable_run)
 
-        # ─── 진행 상태바 ────────────────────────────────────────────────
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.progress.setVisible(False)
+    def _enable_run(self):
+        self.btn_run.setEnabled(bool(self.le_zip.text() and self.le_brand.text() and self.business_number))
 
-        layout.addLayout(h1)
-        layout.addLayout(h2)
-        layout.addLayout(h3)
-        layout.addLayout(h4)
-        layout.addLayout(h5)
-        layout.addWidget(self.progress)
-
-        central.setLayout(layout)
-        self.setCentralWidget(central)
-
-        # 입력값 변경 시 “일괄 처리” 버튼 활성화 여부 갱신
-        self.le_zip.textChanged.connect(self.toggle_batch_button)
-        self.le_inventory.textChanged.connect(self.toggle_batch_button)
-        self.le_brand.textChanged.connect(self.toggle_batch_button)
-
-    @Slot(int)
-    def on_progress_updated(self, value):
-        """시그널로 받은 진행률을 QProgressBar에 적용"""
-        self.progress.setValue(value)
-
-    @Slot(str)
-    def on_crawl_finished(self, message):
-        """크롤링 완료 시 메인 스레드에서 처리 → 자동으로 주문서 생성까지 이어감"""
-        self.progress.setVisible(False)
-        QMessageBox.information(self, "크롤링 완료", message)
-
-        # 주문서 생성 자동 호출
-        try:
-            self.generate_orders()
-        except Exception as e:
-            QMessageBox.critical(self, "주문서 생성 오류", f"주문서 생성 중 오류가 발생했습니다：\n{str(e)}")
-
-        # 버튼 원복
-        self.btn_batch.setText("일괄 처리")
-        self.btn_batch.clicked.disconnect()
-        self.btn_batch.clicked.connect(self.run_batch_pipeline)
-        self.btn_batch.setEnabled(False)
-
-    @Slot(str)
-    def on_crawl_error(self, errmsg):
-        """크롤링 중 에러 발생 시 메인 스레드에서 처리"""
-        self.progress.setVisible(False)
-        QMessageBox.critical(self, "크롤 오류", errmsg)
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
-
-        # 버튼 원복
-        self.btn_batch.setText("일괄 처리")
-        self.btn_batch.clicked.disconnect()
-        self.btn_batch.clicked.connect(self.run_batch_pipeline)
-        self.btn_batch.setEnabled(True)
-
-    def run_batch_pipeline(self):
-        """일괄 처리 버튼 눌렀을 때 → Zero Phase → First Phase"""
-        success = self.zero_phase()
-        if success:
-            self.first_phase()
-
-    def load_config(self):
-        """
-        config.json에서 coupang_id, coupang_pw, brand_name 값을 읽어온다.
-        """
+    # ── 설정 로드 ───────────────────────────────────────────────
+    def _load_config(self):
         if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self.coupang_id = data.get("coupang_id", "")
-                self.coupang_pw = data.get("coupang_pw", "")
-                self.brand_name = data.get("brand_name", "")
-                self.le_brand.setText(self.brand_name)
-            except:
-                self.coupang_id = ""
-                self.coupang_pw = ""
-                self.brand_name = ""
-        else:
-            self.coupang_id = ""
-            self.coupang_pw = ""
-            self.brand_name = ""
+            with open(CONFIG_FILE,"r",encoding="utf-8") as f:
+                d=json.load(f)
+            self.coupang_id=d.get("coupang_id",""); self.coupang_pw=d.get("coupang_pw","")
+            self.brand_name=d.get("brand_name",""); self.business_number=d.get("business_number","")
+            self.le_brand.setText(self.brand_name)
+        self._enable_run()
 
-    def open_settings_dialog(self):
-        """
-        쿠팡 로그인 설정 다이얼로그를 열어서 ID/PW를 입력받고 저장
-        """
-        dlg = SettingsDialog(self)
-        if dlg.exec() == QDialog.Accepted:
-            self.load_config()
+    # ── UI slots ───────────────────────────────────────────────
+    def _pick_zip(self):
+        p,_=QFileDialog.getOpenFileName(self,"발주 ZIP 선택","","ZIP Files (*.zip)")
+        if p: self.order_zip_path=p; self.le_zip.setText(p)
 
-    def toggle_batch_button(self):
-        """발주 ZIP, 재고 Excel, 브랜드명 모두 입력되면 활성화"""
-        if self.le_zip.text() and self.le_inventory.text() and self.le_brand.text():
-            self.btn_batch.setEnabled(True)
-        else:
-            self.btn_batch.setEnabled(False)
+    def _open_settings(self):
+        if SettingsDialog(self).exec()==QDialog.Accepted: self._load_config()
 
-    def select_order_zip(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "발주 리스트 ZIP 선택",
-            "",
-            "ZIP Files (*.zip)"
-        )
-        if path:
-            self.order_zip_path = path
-            self.le_zip.setText(path)
+    # ── 파이프라인 엔트리 ───────────────────────────────────────
+    def _run_pipeline(self):
+        if self._zero_phase(): self.first_phase()
 
-    def select_inventory_xlsx(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "재고 리스트(Excel) 선택",
-            "",
-            "Excel Files (*.xlsx *.xls)"
-        )
-        if path:
-            self.inventory_xlsx_path = path
-            self.le_inventory.setText(path)
-
-    def zero_phase(self) -> bool:
-        """
-        process_order_zip()을 호출하여 ZIP 내부의 엑셀 파일을
-        미리 처리한다. (order_processor 모듈 활용)
-        """
+    # ------------------------------------------------------------------
+    # 0) ZIP 선처리 (기존 order_processor 로직)
+    def _zero_phase(self):
         try:
-            result = process_order_zip(self.order_zip_path)
-            if result["failures"]:
-                QMessageBox.warning(
-                    self, "주의", "일부 파일 처리 실패：\n" + "\n".join(result["failures"])
-                )
+            res=process_order_zip(self.order_zip_path)
+            if res["failures"]:
+                QMessageBox.warning(self,"주의","일부 파일 처리 실패:\n"+"\n".join(res["failures"]))
             else:
-                QMessageBox.information(self, "Zero Phase 완료", "ZIP 파일 처리 및 엑셀 생성 완료")
+                QMessageBox.information(self,"Zero Phase","ZIP 파일 처리 완료.")
             return True
         except Exception as e:
-            print("Zero Phase 에러：", str(e))
-            return False
+            print("Zero Phase 오류:",e); return False
 
     def first_phase(self):
         """
@@ -735,163 +580,79 @@ class OrderApp(QMainWindow):
             print("crawl_and_generate 예외 발생:", e)
             self.crawlError.emit(str(e))
 
-    def generate_orders(self):
-        """
-        재고 엑셀 → 3PL 신청서 / 주문서(부족분) 생성
-        - 같은 바코드가 여러 Shipment에 걸쳐 등장해도
-        ‘사용된 재고’를 누적 관리해 정확히 차감합니다.
-        """
-        try:
-            # ── (1) 재고 파일 읽기 ───────────────────────────────────
-            inv_df = (
-                pd.read_excel(self.inventory_xlsx_path, dtype=str)
-                .fillna("")
-            )
-            inventory_dict = {
-                str(r["바코드"]).strip(): int(float(r.get("수량", 0) or 0))
-                for _, r in inv_df.iterrows()
-                if str(r.get("바코드", "")).strip()
-            }
+    # ── 크롤 완료/오류 핸들러 ────────────────────────────────────
+    def _crawl_ok(self,msg):
+        self.progress.setVisible(False); QMessageBox.information(self,"완료",msg)
+        try: self._generate_orders()
+        except Exception as e: QMessageBox.critical(self,"주문서 오류",str(e))
+        self._reset_btn()
 
-            # ── (2) 발주확정 엑셀 읽기 ────────────────────────────────
-            confirm_path = os.path.join(os.getcwd(), "발주 확정 양식.xlsx")
-            df_confirm = (
-                pd.read_excel(confirm_path, dtype=str)
-                .fillna("")
-            )
-            
-            valid_pos = set(self.orders_data.keys())
-            df_confirm = df_confirm[df_confirm["발주번호"].isin(valid_pos)]
+    def _crawl_err(self,msg):
+        self.progress.setVisible(False); QMessageBox.critical(self,"크롤 오류",msg)
+        if self.driver: self.driver.quit(); self.driver=None
+        self._reset_btn()
 
-            print("=== df_confirm PO ===", df_confirm["발주번호"].unique())
+    def _reset_btn(self):
+        self.btn_run.setText("일괄 처리")
+        self.btn_run.clicked.disconnect(); self.btn_run.clicked.connect(self._run_pipeline)
+        self.btn_run.setEnabled(True)
 
-            df_confirm["확정수량"] = (
-                pd.to_numeric(df_confirm["확정수량"], errors="coerce")
-                .fillna(0)
-                .astype(int)
-            )
+    # ── 주문서·3PL 생성 ───────────────────────────────────────
+    def _generate_orders(self):
+        inv_df = fetch_inventory_for_biz(self.business_number)
+        if inv_df.empty:
+            raise Exception("스프레드시트에 해당 사업자번호 재고가 없습니다.")
 
-            # ① Shipment 매핑
-            df_confirm["Shipment"] = df_confirm["발주번호"].map(
-                lambda x: self.orders_data.get(str(x).strip(), {}).get("shipment", "")
-            )
+        inventory = {
+            str(r["바코드"]).strip(): int(float(r.get("수량",0) or 0))
+            for _, r in inv_df.iterrows()
+            if str(r.get("바코드","")).strip()
+        }
 
-            # ② 더미 행 제거(확정수량 0)
-            df_confirm = df_confirm[df_confirm["확정수량"] > 0]
+        confirm_path=os.path.join(os.getcwd(),"발주 확정 양식.xlsx")
+        df_confirm=pd.read_excel(confirm_path,dtype=str).fillna("")
+        df_confirm=df_confirm[df_confirm["발주번호"].isin(self.orders_data.keys())]
+        df_confirm["확정수량"]=pd.to_numeric(df_confirm["확정수량"],errors="coerce").fillna(0).astype(int)
+        df_confirm["Shipment"]=df_confirm["발주번호"].map(
+            lambda x:self.orders_data.get(str(x).strip(),{}).get("shipment",""))
+        df_confirm=df_confirm[df_confirm["확정수량"]>0]
 
-            # ③ 그룹화
-            group_cols = ["Shipment", "상품바코드", "상품이름", "물류센터", "입고예정일"]
-            df_group = (
-                df_confirm[group_cols + ["확정수량"]]
-                .groupby(group_cols, as_index=False)["확정수량"]
-                .sum()
-            )
+        grp_cols=["Shipment","상품바코드","상품이름","물류센터","입고예정일"]
+        df_grp=df_confirm[grp_cols+["확정수량"]].groupby(grp_cols,as_index=False)["확정수량"].sum()
 
-            # ── (3) 결과 워크북 준비 ──────────────────────────────────
-            wb_3pl, wb_order = Workbook(), Workbook()
-            ws_3pl, ws_order = wb_3pl.active, wb_order.active
-            ws_3pl.title, ws_order.title = "3PL신청서", "주문서"
+        wb3, wbo = Workbook(), Workbook(); ws3, wso = wb3.active, wbo.active
+        ws3.title="3PL신청서"; wso.title="주문서"
+        ws3.append(["브랜드명","쉽먼트번호","발주번호","SKU번호","SKU(제품명)","바코드","수량","공란","입고예정일","센터명"])
+        wso.append(["바코드명","바코드","상품코드","쿠팡납품센터명","쿠팡쉽먼트번호","쿠팡입고예정일자",
+                    "입고마감준수여부","발주 수량","중국재고사용여부"])
 
-            # (a) 3PL 신청서 헤더 – 열 3·4에 발주번호·SKU번호 추가
-            header_3pl = [
-                "브랜드명", "쉽먼트번호",            # 1-2
-                "발주번호", "SKU번호",              # 3-4  ← 수정
-                "SKU(제품명)", "바코드", "수량",     # 5-7
-                "공란",                             # 8   (빈칸 유지)
-                "입고예정일", "센터명"              # 9-10
-            ]
-            ws_3pl.append(header_3pl)
+        used={}
+        for _,r in df_grp.iterrows():
+            bc=str(r["상품바코드"]).strip(); pname=str(r["상품이름"]).strip()
+            ctr=str(r["물류센터"]).strip(); shp=r["Shipment"]; qty=int(r["확정수량"])
+            try: eta_str=pd.to_datetime(r["입고예정일"]).strftime("%Y-%m-%d")
+            except: eta_str=""
+            mask=(df_confirm["Shipment"]==shp)&(df_confirm["상품바코드"]==bc)
+            po=sku=""
+            if mask.any():
+                po=str(df_confirm.loc[mask,"발주번호"].iloc[0]).strip()
+                sku=str(df_confirm.loc[mask,"상품번호"].iloc[0]).strip()
+            ws3.append([self.brand_name,shp,po,sku,pname,bc,qty,"",eta_str,ctr])
 
-            # (b) 주문서 헤더
+            avail=inventory.get(bc,0)-used.get(bc,0); need=max(qty-max(avail,0),0)
+            if need>0:
+                wso.append([pname,bc,sku,ctr,shp,eta_str,"Y",need,"N"])
+            used[bc]=used.get(bc,0)+qty
 
-            ws_order.append([
-                "바코드명", "바코드", "상품코드", "쿠팡납품센터명",
-                "쿠팡쉽먼트번호", "쿠팡입고예정일자", "입고마감준수여부", "발주 수량", "중국재고사용여부"
-            ])
-            
-            # ── (4) 행 쓰기 ─────────────────────────────────────────
-            used_stock, brand = {}, self.le_brand.text().strip()
-
-            for _, r in df_group.iterrows():
-                bc       = str(r["상품바코드"]).strip()
-                pname    = str(r["상품이름"]).strip()
-                center   = str(r["물류센터"]).strip()
-                ship_no  = r["Shipment"]
-                eta_raw  = r["입고예정일"]
-                qty      = int(r["확정수량"])
-
-                # ETA 포맷
-                try:
-                    eta_str = pd.to_datetime(eta_raw).strftime("%Y-%m-%d")
-                except Exception:
-                    eta_str = ""
-
-                # ▶ 발주번호·SKU번호 추출 ─────────────────────
-                mask = (
-                    (df_confirm["Shipment"] == ship_no) &
-                    (df_confirm["상품바코드"] == bc)
-                )
-                po_no = product_code = ""
-                if mask.any():
-                    po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
-                    product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
-
-                # ── 3PL 신청서 행 추가 ────────────────────────
-                ws_3pl.append([
-                    brand,             # 1 브랜드명
-                    ship_no,           # 2 쉽먼트번호
-                    po_no,             # 3 발주번호        ← 신규
-                    product_code,      # 4 SKU번호        ← 신규
-                    pname,             # 5 SKU(제품명)
-                    bc,                # 6 바코드
-                    qty,               # 7 수량
-                    "",                # 8 공란
-                    eta_str,           # 9 입고예정일
-                    center             # 10 센터명
-                ])
-
-                # ── 주문서(부족분만) ──
-                already_used = used_stock.get(bc, 0)
-                avail_now    = inventory_dict.get(bc, 0) - already_used
-                need_qty     = max(qty - max(avail_now, 0), 0)
-
-                if need_qty > 0:
-                    mask = (
-                        (df_confirm["Shipment"] == ship_no) &
-                        (df_confirm["상품바코드"] == bc)
-                    )
-                    product_code = po_no = ""
-                    if mask.any():
-                        product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
-                        po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
-
-                    deadline_ok = "Y"                               # 입고마감준수여부
-
-                    ws_order.append([
-                        pname, bc, product_code, center,
-                        ship_no, eta_str, deadline_ok, need_qty
-                    ])
-
-                used_stock[bc] = already_used + min(qty, max(avail_now, 0))
-
-            # ── (5) 저장 ────────────────────────────────────────────
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            wb_3pl.save(f"3PL신청서_{ts}.xlsx")
-            wb_order.save(f"주문서_{ts}.xlsx")
-
-            QMessageBox.information(
-                self, "완료",
-                f"3PL 신청서와 주문서를 생성했습니다:\n- 3PL신청서_{ts}.xlsx\n- 주문서_{ts}.xlsx"
-            )
-
-        except Exception as e:
-            QMessageBox.critical(self, "오류", f"주문서 생성 중 오류:\n{e}")
+        ts=datetime.now().strftime("%Y%m%d_%H%M%S")
+        wb3.save(f"3PL신청서_{ts}.xlsx"); wbo.save(f"주문서_{ts}.xlsx")
+        QMessageBox.information(self,"완료",
+            f"3PL신청서_{ts}.xlsx / 주문서_{ts}.xlsx 생성 완료")
 
 
-
+# ─── main ───────────────────────────────────────────────────
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
+    app=QApplication(sys.argv)
     check_version_or_exit()
-    window = OrderApp()
-    window.show()
+    win=OrderApp(); win.show()
     sys.exit(app.exec())
