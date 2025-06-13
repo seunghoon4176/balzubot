@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QFormLayout
 )
 from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtGui import QIcon
+
 
 import pandas as pd
 from openpyxl import Workbook
@@ -67,6 +69,9 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("로그인 설정")
         self.setFixedSize(300, 200)
 
+        icon_path = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
+        self.setWindowIcon(QIcon(icon_path))
+        
         layout = QFormLayout(self)
 
         # 아이디 입력
@@ -139,6 +144,9 @@ class OrderApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("수강생 발주 프로그램")
         self.setFixedSize(650, 300)
+
+        icon_path = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
+        self.setWindowIcon(QIcon(icon_path))
 
         # 1) 발주 리스트 ZIP 경로
         self.order_zip_path = None
@@ -784,20 +792,23 @@ class OrderApp(QMainWindow):
             ws_3pl, ws_order = wb_3pl.active, wb_order.active
             ws_3pl.title, ws_order.title = "3PL신청서", "주문서"
 
-            # (a) 3PL 신청서 헤더 – 공란 열 3개
+            # (a) 3PL 신청서 헤더 – 열 3·4에 발주번호·SKU번호 추가
             header_3pl = [
-                "브랜드명", "쉽먼트번호", "공란", "공란",
-                "SKU(제품명)", "바코드", "수량", "공란",
-                "입고예정일", "센터명"
+                "브랜드명", "쉽먼트번호",            # 1-2
+                "발주번호", "SKU번호",              # 3-4  ← 수정
+                "SKU(제품명)", "바코드", "수량",     # 5-7
+                "공란",                             # 8   (빈칸 유지)
+                "입고예정일", "센터명"              # 9-10
             ]
             ws_3pl.append(header_3pl)
 
             # (b) 주문서 헤더
-            ws_order.append([
-                "바코드명", "바코드", "상품코드", "센터명",
-                "쉽먼트번호", "발주번호", "입고예정일", "수량", "브랜드명"
-            ])
 
+            ws_order.append([
+                "바코드명", "바코드", "상품코드", "쿠팡납품센터명",
+                "쿠팡쉽먼트번호", "쿠팡입고예정일자", "입고마감준수여부", "발주 수량", "중국재고사용여부"
+            ])
+            
             # ── (4) 행 쓰기 ─────────────────────────────────────────
             used_stock, brand = {}, self.le_brand.text().strip()
 
@@ -807,31 +818,42 @@ class OrderApp(QMainWindow):
                 center   = str(r["물류센터"]).strip()
                 ship_no  = r["Shipment"]
                 eta_raw  = r["입고예정일"]
+                qty      = int(r["확정수량"])
 
+                # ETA 포맷
                 try:
                     eta_str = pd.to_datetime(eta_raw).strftime("%Y-%m-%d")
                 except Exception:
                     eta_str = ""
 
-                qty = int(r["확정수량"])
+                # ▶ 발주번호·SKU번호 추출 ─────────────────────
+                mask = (
+                    (df_confirm["Shipment"] == ship_no) &
+                    (df_confirm["상품바코드"] == bc)
+                )
+                po_no = product_code = ""
+                if mask.any():
+                    po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
+                    product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
 
-                # ── 3PL 신청서 (템플릿 순서 그대로) ──
+                # ── 3PL 신청서 행 추가 ────────────────────────
                 ws_3pl.append([
-                    brand,          # 0
-                    ship_no,        # 1
-                    "", "",         # 2,3  공란
-                    pname,          # 4
-                    bc,             # 5
-                    qty,            # 6
-                    "",             # 7  공란
-                    eta_str,        # 8
-                    center          # 9
+                    brand,             # 1 브랜드명
+                    ship_no,           # 2 쉽먼트번호
+                    po_no,             # 3 발주번호        ← 신규
+                    product_code,      # 4 SKU번호        ← 신규
+                    pname,             # 5 SKU(제품명)
+                    bc,                # 6 바코드
+                    qty,               # 7 수량
+                    "",                # 8 공란
+                    eta_str,           # 9 입고예정일
+                    center             # 10 센터명
                 ])
 
                 # ── 주문서(부족분만) ──
-                already_used  = used_stock.get(bc, 0)
-                avail_now     = inventory_dict.get(bc, 0) - already_used
-                need_qty      = max(qty - max(avail_now, 0), 0)
+                already_used = used_stock.get(bc, 0)
+                avail_now    = inventory_dict.get(bc, 0) - already_used
+                need_qty     = max(qty - max(avail_now, 0), 0)
 
                 if need_qty > 0:
                     mask = (
@@ -843,9 +865,11 @@ class OrderApp(QMainWindow):
                         product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
                         po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
 
+                    deadline_ok = "Y"                               # 입고마감준수여부
+
                     ws_order.append([
                         pname, bc, product_code, center,
-                        ship_no, po_no, eta_str, need_qty, brand
+                        ship_no, eta_str, deadline_ok, need_qty
                     ])
 
                 used_stock[bc] = already_used + min(qty, max(avail_now, 0))
