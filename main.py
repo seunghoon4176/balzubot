@@ -1,11 +1,4 @@
-# main.py – 2025-06-13 (상품정보 선검증 버전)
-# ──────────────────────────────────────────────────────────────
-# ① 프로그램 시작 → 상품정보.xlsx 존재 확인·템플릿 생성
-# ② ZIP → 발주서 파싱 → 바코드 목록 확보
-# ③ 상품정보와 비교해 누락 있으면 바로 중단
-# ④ 통과 시에만 Selenium 크롤링 진행
-# ⑤ 3PL 신청서 & 주문서(확정수량 그대로)
-# ──────────────────────────────────────────────────────────────
+from PySide6.QtGui import QCloseEvent
 import sys, os, json, zipfile, tempfile, random, threading, shutil, time, re
 from datetime import datetime
 import openpyxl
@@ -28,12 +21,10 @@ from selenium.webdriver.support import expected_conditions as EC
 
 # ZIP 전처리 모듈
 from order_processor import process_order_zip, is_confirmed_excel
-
+import subprocess
 
 # ─── 상수 ─────────────────────────────────────────────────────
 CONFIG_FILE   = "config.json"
-LOCAL_VERSION = "1.0.0"
-VERSION_URL   = "https://seunghoon4176.github.io/balzubot/version.json"
 
 PRODUCT_XLSX = os.path.join(os.path.dirname(__file__), "상품정보.xlsx")
 PRODUCT_HEADERS = [
@@ -69,18 +60,7 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
     )
 
 # ─── 버전 확인 ───────────────────────────────────────────────
-def check_version_or_exit():
-    try:
-        r = requests.get(VERSION_URL, timeout=5)
-        if r.status_code == 200 and r.json().get("version") != LOCAL_VERSION:
-            QMessageBox.critical(
-                None, "버전 만료",
-                "현재 프로그램 버전이 만료되었습니다.\n최신 버전을 내려받아 주세요."
-            )
-            sys.exit(1)
-    except Exception as e:
-        QMessageBox.critical(None, "버전 확인 오류", str(e))
-        sys.exit(1)
+
 
 
 # ─── 설정 다이얼로그 ─────────────────────────────────────────
@@ -129,6 +109,78 @@ class SettingsDialog(QDialog):
             parent._load_config()  
 
 
+class UpdateWindow(QWidget):
+    progressChanged = Signal(int)  # ✅ 시그널 정의
+
+    def __init__(self, update_url, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("업데이트 중...")
+        self.setFixedSize(300, 100)
+        self.progress = QProgressBar(self)
+        self.progress.setRange(0, 100)
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("업데이트 중입니다. 잠시만 기다려주세요."))
+        layout.addWidget(self.progress)
+
+        self.progressChanged.connect(self.progress.setValue)  # ✅ 시그널 → UI 연결
+
+        self.show()
+
+        # 업데이트 쓰레드 실행
+        import threading
+        threading.Thread(target=self.perform_update_auto, args=(update_url,), daemon=True).start()
+
+    def perform_update_auto(self, update_url):
+        try:
+            # 현재 exe가 있는 디렉토리 기준으로 다운로드 및 압축 해제
+            base_dir = os.path.dirname(sys.argv[0])
+            zip_path = os.path.join(base_dir, "balzubot_update.zip")
+            extract_dir = os.path.join(base_dir, "balzubot_new")
+
+            with requests.get(update_url, stream=True) as r:
+                r.raise_for_status()
+                total = int(r.headers.get('content-length', 0))
+                downloaded = 0
+                with open(zip_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            percent = int(downloaded / total * 100)
+                            self.progressChanged.emit(min(percent, 99))
+
+            # 압축 해제
+            if os.path.exists(extract_dir):
+                shutil.rmtree(extract_dir)
+            shutil.unpack_archive(zip_path, extract_dir)
+
+            # 실행 파일 찾기 및 실행
+            exe_files = [f for f in os.listdir(extract_dir) if f.endswith(".exe")]
+            if not exe_files:
+                self._show_error("실행 파일을 찾을 수 없습니다.")
+                return
+
+            self.progressChanged.emit(100)
+            time.sleep(0.5)
+
+            exe_path = os.path.join(extract_dir, exe_files[0])
+            subprocess.Popen([exe_path])
+            time.sleep(1)
+            os._exit(0)
+
+        except Exception as e:
+            self._show_error(f"업데이트 실패: {e}")
+            os._exit(1)
+
+    def _show_error(self, msg):
+        # ✅ 메시지박스는 메인 스레드에서 실행되도록 시그널로 처리해도 좋지만, 여기선 최소화 위해 직접 사용
+        QMessageBox.critical(self, "업데이트 오류", msg)
+
+    def closeEvent(self, event):
+        os._exit(1)
+
+
 # ─── 메인 윈도우 ────────────────────────────────────────────
 class OrderApp(QMainWindow):
 
@@ -159,6 +211,7 @@ class OrderApp(QMainWindow):
         self.progressUpdated.connect(lambda v: self.progress.setValue(v))
         self.crawlFinished.connect(self._crawl_ok)
         self.crawlError.connect(self._crawl_err)
+
 
     # UI ----------------------------------------------------------------
     def _build_ui(self):
@@ -193,6 +246,8 @@ class OrderApp(QMainWindow):
         lay.addWidget(self.progress)
 
         for w in (self.le_zip, self.le_brand): w.textChanged.connect(self._enable_run)
+
+
 
     def _enable_run(self):
         self.btn_run.setEnabled(bool(self.le_zip.text() and self.le_brand.text() and self.business_number))
@@ -659,6 +714,24 @@ class OrderApp(QMainWindow):
 # ─── main ───────────────────────────────────────────────────
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    check_version_or_exit()
-    win = OrderApp(); win.show()
+
+    try:
+        VERSION_URL = "http://114.207.245.49/version"
+        LOCAL_VERSION = "1.0.0"
+        r = requests.get(VERSION_URL, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            latest_ver = data.get("balzubotversion")
+            update_url = data.get("balzubot_update_url")
+            if latest_ver and update_url and latest_ver != LOCAL_VERSION:
+                update_win = UpdateWindow(update_url)
+                sys.exit(app.exec())
+
+    except Exception as e:
+        QMessageBox.critical(None, "업데이트 오류", str(e))
+        sys.exit(1)
+
+    # 최신이면 본 프로그램 실행
+    win = OrderApp()
+    win.show()
     sys.exit(app.exec())
