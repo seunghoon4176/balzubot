@@ -23,10 +23,38 @@ from selenium.webdriver.support import expected_conditions as EC
 from order_processor import process_order_zip, is_confirmed_excel
 import subprocess
 
+import gspread
+import google.auth
+import google.auth.transport.requests
+import google.oauth2.service_account
+from google.oauth2.service_account import Credentials
+
+# --------------------------------------------------------------
+GOOGLE_CREDENTIALS_DICT ={
+  "type": "service_account",
+  "project_id": "balzubot3pl",
+  "private_key_id": "8880c2ae6fc28d7f5d454dad6878d98595740590",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCxETdx6nsjuyHu\nTwhB2B1AbUxRiC5OGlujB6VTUDdge8jH1cWOhybY5Nul1f8oCgdv/wd5MVGCxfBK\nyjf0T3GGzMfx7lsAslj4mORvt4hhEaIm0EG8stcZr7MClE5unUkZBMqlIXSCTY47\nZbaoCRQfPumHfwMOvLuYYyvrpuTOSPZVk0h5s2xHyKxzzmXxMXZzlAeNS+1e8AhR\n64F63/0hPr5M49S+vnR6kN+AiUwH8WhCuLUbn2iiAF6HAOAEH+iEdYpCu1RPI6zR\nkM3r4/MBVo7CIIU6Y6KiTpSqrGSlZ6NZmUQVk2tXs63AJ8ncoqjqVBQ7CfRs6q5G\nz1gSkoT/AgMBAAECggEAAR2nqMsefYonW5YZ6jhPbuGBcp4WFJ3r5+oba5v8zVna\nWRAKz6wgXYuLqs7fbcQqadVEmcnqxpUyv3Xoxlxdzciqlea3ohh9oQttnRqd/Gad\nC/uR/ntuCZZm3WRL3jyVglfaYxID5vJQLCWm8gYkn1HJLPZq8YPU9s/hLfn+RSKD\n4FATUQuoDuXJT4mLz3YvL3QXBiUJL2Iuis+VOAPqv5fuy2Sa5X46b+snaP73FTTw\nk6PeEcb+VDIDZzHEC+5ifTgy1+7Aj8ADkVi3nTBjY6FJFyf1D3XoIa8DhMhLBfCS\nJILxmdblBK2Q7q3EM9mSQg9zGSFtp+rjrv0eSm5TSQKBgQDr6+kxjkJE6PCdfqw3\nF/9eOuzgxJgytUWlgFwBp2dYzDUT35DL+LwcrmSgZDgwyNlFy+g8eceRHiJ8c/hl\ngClGQXdjYJn9LBuhh/e678G3q0Ul8c7xzU9ahu6E1Okl7sXvgLf4WpPcFW9GyTJB\nka6ODZFeE2x1mCc5Xn3H/5Ao4wKBgQDAIwfq1cOHuXBp4CWvxfvEJURMcx//05aY\nwCCG5L42TS1gdl/fLq/yDOQjvnxyihUrZwrq59kEBxBXGSCA5t9wTHvxfpWRF4Rw\nGbFF3v/ICCr/KisCva5CKYq0170qu9eULvx/7sJIPZDiyKgfxnHeWEr7OAZiGngU\n59JRv5EaNQKBgHm6XLUkGM9jfZtV29gFes8NCmIjLgCkBY6Sf2afELUBkLVzWkvU\nSINn/CXB8DhDuc/ImUhy8WTQLq0WTWlZynIkn0xYcLvvwUYEWO9MfCCfr2sXrFaZ\nP8OO8Yz6Kl5XKCwet03etoINUUAt2c95Mp67I3FuBj1ax4pTVgUWuTRPAoGBAIO7\nQOFkQFQc8xLUKGKURmKb/nC/+e+HnVgLWgHCcRt/3J2na2H0e5Nj/UL4hhBt1cfV\nNSoLXcIiKbTduGhIYmd3OP9A/8Djs9y78Mvr8ciuuPQLcEPH0uLv4nbM95iGA29I\nq7v28eNfuqeSVZq7jzSXqokFR3MZnL0QmCWORykFAoGBAMbCBxW7f+RONlPT/xZu\nlcP2ZY0V9I41OpkwVJWmKtb92FUmfhnz+3NL2TbwOOETVJ13I8bLRUGgutID9er1\nTXOJ3hadG9i7yMZErTG5z46HNGO7y+i/sXvvcN8MsRyyCeNm0Mc1l2Pw3BaPB5dp\nPmewnMcOm9zvQHPozrFZwK+G\n-----END PRIVATE KEY-----\n",
+  "client_email": "balzubot-writer@balzubot3pl.iam.gserviceaccount.com",
+  "client_id": "111053994416299625825",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/balzubot-writer%40balzubot3pl.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
+
+
 # ─── 상수 ─────────────────────────────────────────────────────
 CONFIG_FILE   = "config.json"
 
-PRODUCT_XLSX = os.path.join(os.path.dirname(__file__), "상품정보.xlsx")
+if getattr(sys, 'frozen', False):  # PyInstaller 실행 여부
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(__file__)
+
+PRODUCT_XLSX = os.path.join(BASE_DIR, "상품정보.xlsx")
+
 PRODUCT_HEADERS = [
     "상품바코드", "상품바코드명", "상품코드",
     "상품옵션1(중문)", "상품옵션2(중문)", "상품옵션3(중문)",
@@ -58,9 +86,6 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
     return df[[bc_col, qty_col]].rename(
         columns={bc_col: "바코드", qty_col: "수량"}
     )
-
-# ─── 버전 확인 ───────────────────────────────────────────────
-
 
 
 # ─── 설정 다이얼로그 ─────────────────────────────────────────
@@ -128,7 +153,6 @@ class UpdateWindow(QWidget):
         self.show()
 
         # 업데이트 쓰레드 실행
-        import threading
         threading.Thread(target=self.perform_update_auto, args=(update_url,), daemon=True).start()
 
     def perform_update_auto(self, update_url):
@@ -374,7 +398,13 @@ class OrderApp(QMainWindow):
                 pct = int((idx + 1) / len(excel_files) * 30)
                 self.progressUpdated.emit(pct)
 
-            # 1-B. 상품정보.xlsx 바코드 선검증
+            # 1-B. 상품정보.xlsx 바코드 선검증 + 누락 자동 추가
+            if not os.path.exists(PRODUCT_XLSX):
+                wb = Workbook()
+                ws = wb.active
+                ws.append(PRODUCT_HEADERS)
+                wb.save(PRODUCT_XLSX)
+
             prod_df = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
             if "상품바코드" not in prod_df.columns:
                 raise Exception("상품정보.xlsx에 '상품바코드' 열이 없습니다.")
@@ -384,11 +414,28 @@ class OrderApp(QMainWindow):
             missing = [bc for bc in needed_barcodes if bc not in known_barcodes]
 
             if missing:
-                QMessageBox.critical(
-                    self, "누락 상품",
-                    "다음 바코드가 상품정보에 없습니다:\n" + "\n".join(missing)
+                rows_to_append = []
+                for po_info in self.orders_data.values():
+                    bc = po_info["barcode"]
+                    if bc in missing:
+                        row = [
+                            bc,
+                            po_info.get("product_name", ""),
+                            po_info.get("product_code", ""),
+                        ] + [""] * (len(PRODUCT_HEADERS) - 3)
+                        rows_to_append.append(row)
+
+                wb = openpyxl.load_workbook(PRODUCT_XLSX)
+                ws = wb.active
+                for row in rows_to_append:
+                    ws.append(row)
+                wb.save(PRODUCT_XLSX)
+
+                QMessageBox.information(
+                    self, "상품정보 자동 추가",
+                    "상품정보.xlsx에 누락된 항목을 자동으로 추가했습니다.\n내용 확인 후 다시 실행해주세요."
                 )
-                return   # Selenium 단계로 넘어가지 않고 종료
+                return
 
             try:
                 inv_df = load_stock_df(self.business_number)
@@ -405,7 +452,7 @@ class OrderApp(QMainWindow):
                     "주문서에 전량(부족분) 주문으로 반영됩니다:\n"
                     + "\n".join(missing_stock)
                 )
-            
+
             # 1-C. Selenium WebDriver 생성 & 로그인
             self.progress.setVisible(True)
             self.progressUpdated.emit(30)
@@ -425,7 +472,7 @@ class OrderApp(QMainWindow):
             )
             self.driver.get(oauth_url)
 
-            if self.coupang_id and self.coupang_pw:  # 자동 로그인
+            if self.coupang_id and self.coupang_pw:
                 try:
                     WebDriverWait(self.driver, 15).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "input[name='username']"))
@@ -435,7 +482,6 @@ class OrderApp(QMainWindow):
                 except Exception:
                     pass  # 자동 로그인 실패 → 수동 로그인
 
-            # 버튼 전환
             self.btn_batch.setText("로그인 완료")
             self.btn_batch.clicked.disconnect()
             self.btn_batch.clicked.connect(self.second_phase)
@@ -554,138 +600,126 @@ class OrderApp(QMainWindow):
     # 3) 3PL 신청서 & 주문서 생성
     # ──────────────────────────────────────────────────────────
     def generate_orders(self):
-        try:
-            import openpyxl  # 원데이 템플릿 읽기에 사용
 
-            # 1️⃣ 스프레드시트 재고 → dict
+        def append_to_google_sheet(sheet_id: str, sheet_name: str, brand: str, rows: list[list[str]]):
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=scopes)
+            client = gspread.authorize(creds)
+            sheet = client.open_by_key(sheet_id)
+            worksheet = sheet.worksheet(sheet_name)
+
+            brand_marker = [[f"[브랜드명] : {brand}"]]
+            spacer = [[""]]
+            content_rows = rows[1:]  # 헤더 제외
+            worksheet.append_rows(spacer + brand_marker + content_rows + spacer, value_input_option="USER_ENTERED")
+
+        try:
             inv_df = load_stock_df(self.business_number)
             inventory_dict = {
                 str(r["바코드"]).strip(): int(float(r["수량"] or 0))
                 for _, r in inv_df.iterrows()
             }
-            used_stock: dict[str, int] = {}   # 바코드별 누적 소모량
+            used_stock = {}
 
-            # 2️⃣ 상품정보.xlsx (원데이 주문서에 필요)
-            prod_df = (
-                pd.read_excel(PRODUCT_XLSX, dtype=str, engine="openpyxl")
-                .fillna("")
-            )
+            prod_df = pd.read_excel("상품정보.xlsx", dtype=str).fillna("")
 
-            # 3️⃣ 발주확정 엑셀
-            confirm_path = os.path.join(os.getcwd(), "발주 확정 양식.xlsx")
-            df_confirm = pd.read_excel(confirm_path, dtype=str, engine="openpyxl").fillna("")
-            df_confirm["확정수량"] = (
-                pd.to_numeric(df_confirm["확정수량"], errors="coerce").fillna(0).astype(int)
-            )
-
+            confirm_path = "발주 확정 양식.xlsx"
+            df_confirm = pd.read_excel(confirm_path, dtype=str).fillna("")
+            df_confirm["확정수량"] = pd.to_numeric(df_confirm["확정수량"], errors="coerce").fillna(0).astype(int)
             df_confirm["Shipment"] = df_confirm["발주번호"].map(
                 lambda x: self.orders_data.get(str(x).strip(), {}).get("shipment", "")
             )
             df_confirm = df_confirm[df_confirm["확정수량"] > 0]
 
-            # 4️⃣ 그룹화(Shipment·바코드 단위)
             group_cols = ["Shipment", "상품바코드", "상품이름", "물류센터", "입고예정일"]
-            df_group = (
-                df_confirm[group_cols + ["확정수량"]]
-                .groupby(group_cols, as_index=False)["확정수량"]
-                .sum()
-            )
-
-            # 5️⃣ 결과 워크북들
-            wb_3pl, wb_order = Workbook(), Workbook()
-            ws_3pl, ws_order = wb_3pl.active, wb_order.active
-            ws_3pl.title, ws_order.title = "3PL신청서", "주문서"
-
-            ws_3pl.append([
-                "브랜드명", "쉽먼트번호", "발주번호", "SKU번호",
-                "SKU(제품명)", "바코드", "수량", "", "입고예정일", "센터명"
-            ])
-            ws_order.append([
-                "바코드명", "바코드", "상품코드", "쿠팡납품센터명",
-                "쿠팡쉽먼트번호", "쿠팡입고예정일자",
-                "입고마감준수여부", "발주수량", "중국재고사용여부"
-            ])
-
-            wb_one = openpyxl.Workbook()
-            ws_one = wb_one.active
-            ws_one.title = "원데이주문서"
-
-            # 헤더(1행) 직접 작성
-            ws_one.append([
-                "상품URL", "단가(위안)", "수량", "색상(옵션1)", "사이즈(옵션2)",
-                "이미지URL", "상품바코드", "상품바코드명", "브랜드명"
-            ])
-
-            row_one = 2   # 데이터는 2행부터
+            df_group = df_confirm[group_cols + ["확정수량"]].groupby(group_cols, as_index=False)["확정수량"].sum()
 
             brand = self.le_brand.text().strip()
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            # 6️⃣ 행 작성
+            headers_3pl = ["브랜드명", "쉽먼트번호", "발주번호", "SKU번호",
+                        "SKU(제품명)", "바코드", "수량", "", "입고예정일", "센터명"]
+            rows_3pl = [headers_3pl]
+
+            headers_order = ["바코드명", "바코드", "상품코드", "쿠팡납품센터명",
+                            "쿠팡쉽먼트번호", "쿠팡입고예정일자", "입고마감준수여부", "발주수량", "중국재고사용여부"]
+            rows_order = [headers_order]
+
+            wb_3pl = Workbook()
+            ws_3pl = wb_3pl.active
+            ws_3pl.title = "3PL신청서"
+            ws_3pl.append(headers_3pl)
+
+            wb_order = Workbook()
+            ws_order = wb_order.active
+            ws_order.title = "주문서"
+            ws_order.append(headers_order)
+
             for _, r in df_group.iterrows():
-                bc       = r["상품바코드"]
-                pname    = r["상품이름"]
-                center   = r["물류센터"]
-                ship_no  = r["Shipment"]
-                eta_raw  = r["입고예정일"]
-                qty      = int(r["확정수량"])
-
+                bc = r["상품바코드"]
+                pname = r["상품이름"]
+                center = r["물류센터"]
+                ship_no = r["Shipment"]
+                eta_raw = r["입고예정일"]
+                qty = int(r["확정수량"])
                 eta_str = pd.to_datetime(eta_raw, errors="coerce").strftime("%Y-%m-%d") if eta_raw else ""
 
-                # 발주번호·상품코드 조회
                 mask = (df_confirm["Shipment"] == ship_no) & (df_confirm["상품바코드"] == bc)
                 po_no = product_code = ""
                 if mask.any():
-                    po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
+                    po_no = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
                     product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
 
-                # → 3PL 신청서
-                ws_3pl.append([
-                    brand, ship_no, po_no, product_code,
-                    pname, bc, qty, "", eta_str, center
-                ])
+                row_3pl = [brand, ship_no, po_no, product_code, pname, bc, qty, "", eta_str, center]
+                rows_3pl.append(row_3pl)
+                ws_3pl.append(row_3pl)
 
-                # 재고 차감
                 already = used_stock.get(bc, 0)
-                avail   = inventory_dict.get(bc, 0) - already
-                need    = max(qty - max(avail, 0), 0)
+                avail = inventory_dict.get(bc, 0) - already
+                need = max(qty - max(avail, 0), 0)
 
-                # → 기존 주문서: 부족분만
                 if need > 0:
-                    ws_order.append([
-                        pname, bc, product_code, center,
-                        ship_no, eta_str, "Y", need, "N"
-                    ])
-
-                # → 원데이 주문서: 부족분만
-                if need > 0:
-                    prod_row = prod_df[prod_df["상품바코드"] == bc]
-                    prod_row = prod_row.iloc[0] if not prod_row.empty else {}
-
-                    ws_one.cell(row_one, 1).value = prod_row.get("상품URL", "")          # 중국 사이트
-                    ws_one.cell(row_one, 2).value = prod_row.get("상품단가(위안)", "")
-                    ws_one.cell(row_one, 3).value = need                                # 수량
-                    ws_one.cell(row_one, 4).value = prod_row.get("상품옵션1(중문)", "")
-                    ws_one.cell(row_one, 5).value = prod_row.get("상품옵션2(중문)", "")    # 사이즈
-                    ws_one.cell(row_one, 6).value = prod_row.get("이미지URL", "")
-                    ws_one.cell(row_one, 7).value = bc
-                    ws_one.cell(row_one, 8).value = prod_row.get("상품바코드명", "")
-                    ws_one.cell(row_one, 9).value = brand
-                    row_one += 1
+                    row_order = [pname, bc, product_code, center, ship_no, eta_str, "Y", need, "N"]
+                    rows_order.append(row_order)
+                    ws_order.append(row_order)
 
                 used_stock[bc] = already + min(qty, max(avail, 0))
 
-            # 7️⃣ 저장 및 알림
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            wb_3pl.save(f"3PL신청서_{ts}.xlsx")
+            # ✅ 스프레드시트 전송
+            append_to_google_sheet(
+                sheet_id="1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI",
+                sheet_name="3PL (발주봇 업로드)",
+                brand=brand,
+                rows=rows_3pl
+            )
+
+            if len(rows_order) == 1:
+                # ✅ 주문할 항목 없음
+                ws_order.cell(row=2, column=1).value = "재고가 충분하여 주문할 항목이 없습니다."
+                append_to_google_sheet(
+                    sheet_id="1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI",
+                    sheet_name="주문서 (발주봇 업로드)",
+                    brand=brand,
+                    rows=[["재고가 충분하여 주문할 항목이 없습니다."]]
+                )
+            else:
+                append_to_google_sheet(
+                    sheet_id="1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI",
+                    sheet_name="주문서 (발주봇 업로드)",
+                    brand=brand,
+                    rows=rows_order
+                )
+
+            # ✅ 파일 저장
+            wb_3pl.save(f"3PL신청내역_{ts}.xlsx")
             wb_order.save(f"주문서_{ts}.xlsx")
-            wb_one.save(f"원데이주문서_{ts}.xlsx")
 
             QMessageBox.information(
                 self, "완료",
-                f"아래 3개 파일을 생성했습니다:\n"
-                f"- 3PL신청서_{ts}.xlsx\n"
-                f"- 주문서_{ts}.xlsx\n"
-                f"- 원데이주문서_{ts}.xlsx"
+                f"스프레드시트 전송 완료!\n"
+                f"파일도 저장했습니다:\n"
+                f"- 3PL신청내역_{ts}.xlsx\n"
+                f"- 주문서_{ts}.xlsx"
             )
 
         except Exception as e:
@@ -717,7 +751,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.0"
+        LOCAL_VERSION = "1.0.1"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
