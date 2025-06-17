@@ -32,6 +32,9 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
+import email.mime.multipart
+import email.mime.text
+import email.mime.base
 # --------------------------------------------------------------
 def load_credentials():
     if getattr(sys, 'frozen', False):
