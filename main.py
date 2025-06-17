@@ -30,19 +30,7 @@ import google.oauth2.service_account
 from google.oauth2.service_account import Credentials
 
 # --------------------------------------------------------------
-GOOGLE_CREDENTIALS_DICT ={
-  "type": "service_account",
-  "project_id": "balzubot3pl",
-  "private_key_id": "8880c2ae6fc28d7f5d454dad6878d98595740590",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCxETdx6nsjuyHu\nTwhB2B1AbUxRiC5OGlujB6VTUDdge8jH1cWOhybY5Nul1f8oCgdv/wd5MVGCxfBK\nyjf0T3GGzMfx7lsAslj4mORvt4hhEaIm0EG8stcZr7MClE5unUkZBMqlIXSCTY47\nZbaoCRQfPumHfwMOvLuYYyvrpuTOSPZVk0h5s2xHyKxzzmXxMXZzlAeNS+1e8AhR\n64F63/0hPr5M49S+vnR6kN+AiUwH8WhCuLUbn2iiAF6HAOAEH+iEdYpCu1RPI6zR\nkM3r4/MBVo7CIIU6Y6KiTpSqrGSlZ6NZmUQVk2tXs63AJ8ncoqjqVBQ7CfRs6q5G\nz1gSkoT/AgMBAAECggEAAR2nqMsefYonW5YZ6jhPbuGBcp4WFJ3r5+oba5v8zVna\nWRAKz6wgXYuLqs7fbcQqadVEmcnqxpUyv3Xoxlxdzciqlea3ohh9oQttnRqd/Gad\nC/uR/ntuCZZm3WRL3jyVglfaYxID5vJQLCWm8gYkn1HJLPZq8YPU9s/hLfn+RSKD\n4FATUQuoDuXJT4mLz3YvL3QXBiUJL2Iuis+VOAPqv5fuy2Sa5X46b+snaP73FTTw\nk6PeEcb+VDIDZzHEC+5ifTgy1+7Aj8ADkVi3nTBjY6FJFyf1D3XoIa8DhMhLBfCS\nJILxmdblBK2Q7q3EM9mSQg9zGSFtp+rjrv0eSm5TSQKBgQDr6+kxjkJE6PCdfqw3\nF/9eOuzgxJgytUWlgFwBp2dYzDUT35DL+LwcrmSgZDgwyNlFy+g8eceRHiJ8c/hl\ngClGQXdjYJn9LBuhh/e678G3q0Ul8c7xzU9ahu6E1Okl7sXvgLf4WpPcFW9GyTJB\nka6ODZFeE2x1mCc5Xn3H/5Ao4wKBgQDAIwfq1cOHuXBp4CWvxfvEJURMcx//05aY\nwCCG5L42TS1gdl/fLq/yDOQjvnxyihUrZwrq59kEBxBXGSCA5t9wTHvxfpWRF4Rw\nGbFF3v/ICCr/KisCva5CKYq0170qu9eULvx/7sJIPZDiyKgfxnHeWEr7OAZiGngU\n59JRv5EaNQKBgHm6XLUkGM9jfZtV29gFes8NCmIjLgCkBY6Sf2afELUBkLVzWkvU\nSINn/CXB8DhDuc/ImUhy8WTQLq0WTWlZynIkn0xYcLvvwUYEWO9MfCCfr2sXrFaZ\nP8OO8Yz6Kl5XKCwet03etoINUUAt2c95Mp67I3FuBj1ax4pTVgUWuTRPAoGBAIO7\nQOFkQFQc8xLUKGKURmKb/nC/+e+HnVgLWgHCcRt/3J2na2H0e5Nj/UL4hhBt1cfV\nNSoLXcIiKbTduGhIYmd3OP9A/8Djs9y78Mvr8ciuuPQLcEPH0uLv4nbM95iGA29I\nq7v28eNfuqeSVZq7jzSXqokFR3MZnL0QmCWORykFAoGBAMbCBxW7f+RONlPT/xZu\nlcP2ZY0V9I41OpkwVJWmKtb92FUmfhnz+3NL2TbwOOETVJ13I8bLRUGgutID9er1\nTXOJ3hadG9i7yMZErTG5z46HNGO7y+i/sXvvcN8MsRyyCeNm0Mc1l2Pw3BaPB5dp\nPmewnMcOm9zvQHPozrFZwK+G\n-----END PRIVATE KEY-----\n",
-  "client_email": "balzubot-writer@balzubot3pl.iam.gserviceaccount.com",
-  "client_id": "111053994416299625825",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/balzubot-writer%40balzubot3pl.iam.gserviceaccount.com",
-  "universe_domain": "googleapis.com"
-}
+
 
 
 # ─── 상수 ─────────────────────────────────────────────────────
@@ -66,26 +54,43 @@ PRODUCT_HEADERS = [
 
 STOCK_SHEET_CSV = (
     "https://docs.google.com/spreadsheets/d/"
-    "1sYtryUcGjritwwU6IGxc49uGZAIzkICo2QNBVw0kyNo/export"
+    "1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI/export"
     "?format=csv&gid=794212207"
 )
 
 ICON_PATH = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
 
 
-def load_stock_df(biz_num: str) -> pd.DataFrame:
-    """스프레드시트 → 사업자번호별 재고 DataFrame 반환"""
-    df = pd.read_csv(STOCK_SHEET_CSV, dtype=str).fillna("")
-    biz_col = next(c for c in df.columns if "사업자" in c)
-    bc_col  = next(c for c in df.columns if "바코드" in c)
-    qty_col = next(c for c in df.columns if "수량"   in c)
+def safe_strip(value):
+    """None 또는 NaN을 안전하게 처리하여 문자열로 반환"""
+    if pd.isna(value) or value is None:
+        return ""
+    return str(value).strip()
 
-    df = df[df[biz_col].astype(str).str.strip() == biz_num]
-    if df.empty:
-        print("스프레드시트에 해당 사업자번호 재고가 없습니다.")
-    return df[[bc_col, qty_col]].rename(
-        columns={bc_col: "바코드", qty_col: "수량"}
-    )
+def load_stock_df(biz_num: str) -> pd.DataFrame:
+    try:
+        GOOGLE_CREDENTIALS_DICT["private_key"] = GOOGLE_CREDENTIALS_DICT["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        client = gspread.authorize(creds)
+
+        sheet = client.open_by_key("1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI").worksheet("재고리스트")  # 시트 이름에 따라 변경
+        data = sheet.get_all_values()
+        df = pd.DataFrame(data[1:], columns=data[0]).fillna("")
+
+        biz_col = next((c for c in df.columns if "사업자 번호" in c), None)
+        bc_col  = next((c for c in df.columns if "바코드" in c), None)
+        qty_col = next((c for c in df.columns if "수량"   in c), None)
+
+        if not all([biz_col, bc_col, qty_col]):
+            print("[재고 시트 오류] 필수 열 누락 - 사업자, 바코드, 수량 중 하나가 없습니다.")
+            return pd.DataFrame(columns=["바코드", "수량"])
+
+        df = df[df[biz_col].astype(str).str.strip() == biz_num]
+        return df[[bc_col, qty_col]].rename(columns={bc_col: "바코드", qty_col: "수량"})
+
+    except Exception as e:
+        print("[load_stock_df 예외 발생]", e)
+        return pd.DataFrame(columns=["바코드", "수량"])
 
 
 # ─── 설정 다이얼로그 ─────────────────────────────────────────
@@ -333,10 +338,12 @@ class OrderApp(QMainWindow):
     # 1) 발주서 파싱 + 바코드 검증 + Selenium --------------------------------
     def _first_phase(self):
         try:
+            print("fisrt phase 시작")
+
             # 1-A. ZIP 해제 및 발주서 파싱
             tmpdir = tempfile.mkdtemp(prefix="order_zip_")
             excel_files = []
-            confirmed_skipped = 0  # 확정본 건수 카운트
+            confirmed_skipped = 0
 
             with zipfile.ZipFile(self.order_zip_path, 'r') as zf:
                 for zi in zf.infolist():
@@ -354,23 +361,23 @@ class OrderApp(QMainWindow):
                         dst.write(src.read())
 
                     if real_name.lower().endswith((".xls", ".xlsx")):
-                        if is_confirmed_excel(target):   # 확정본은 스킵
+                        if is_confirmed_excel(target):
                             os.remove(target)
                             confirmed_skipped += 1
                             continue
                         excel_files.append(target)
 
             if not excel_files:
-                if confirmed_skipped > 0:
-                    QMessageBox.information(
-                        self, "안내",
-                        f"모든 엑셀 파일이 발주 확정본으로 확인되어 제외되었습니다.\n({confirmed_skipped}건)"
-                    )
-                else:
-                    QMessageBox.information(self, "안내", "미확정 발주서가 없습니다.")
+                msg = (
+                    f"모든 엑셀 파일이 발주 확정본으로 제외되었습니다. ({confirmed_skipped}건)"
+                    if confirmed_skipped > 0 else "미확정 발주서가 없습니다."
+                )
+                QMessageBox.information(self, "안내", msg)
                 return
 
             self.orders_data.clear()
+            print("fisrt phase 중간체크")
+
             for idx, xlsx in enumerate(excel_files):
                 df_raw = pd.read_excel(xlsx, header=None, dtype=str)
                 po_row = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("발주번호", na=False)].index[0]
@@ -378,9 +385,12 @@ class OrderApp(QMainWindow):
 
                 eta_row = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("입고예정일시", na=False)].index[0] + 1
                 eta_raw = df_raw.iloc[eta_row, 5]
-                eta     = pd.to_datetime(eta_raw, errors="coerce").to_pydatetime()
+                eta     = pd.to_datetime(eta_raw, errors="coerce")
+                if pd.isna(eta):
+                    raise ValueError(f"입고예정일시 변환 오류: {eta_raw}")
+                eta = eta.to_pydatetime()
 
-                center  = str(df_raw.iloc[eta_row, 2]).strip()
+                center = str(df_raw.iloc[eta_row, 2]).strip()
 
                 df_items = pd.read_excel(xlsx, header=19, dtype=str)
                 df_items = df_items.loc[:, ~df_items.columns.str.startswith("Unnamed")]
@@ -408,37 +418,36 @@ class OrderApp(QMainWindow):
                 pct = int((idx + 1) / len(excel_files) * 30)
                 self.progressUpdated.emit(pct)
 
-            # 1-B. 상품정보.xlsx 바코드 선검증 + 누락 자동 추가
-            if not os.path.exists(PRODUCT_XLSX):
-                wb = Workbook()
-                ws = wb.active
-                ws.append(PRODUCT_HEADERS)
-                wb.save(PRODUCT_XLSX)
+            print("fisrt phase 중간체크3")
 
+            # 1-B. 상품정보.xlsx 바코드 검증 및 누락 자동 추가
             prod_df = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
             if "상품바코드" not in prod_df.columns:
                 raise Exception("상품정보.xlsx에 '상품바코드' 열이 없습니다.")
 
-            known_barcodes = set(prod_df["상품바코드"].astype(str).str.strip())
-            needed_barcodes = {info["barcode"] for info in self.orders_data.values() if info["barcode"]}
+            known_barcodes = set(prod_df["상품바코드"].astype(str).str.strip().str.lower())
+            needed_barcodes = {str(v["barcode"]).strip().lower() for v in self.orders_data.values()}
             missing = [bc for bc in needed_barcodes if bc not in known_barcodes]
 
             if missing:
                 rows_to_append = []
                 for po_info in self.orders_data.values():
-                    bc = po_info["barcode"]
-                    if bc in missing:
+                    bc = str(po_info.get("barcode", "")).strip()
+                    if bc.lower() in missing:
                         row = [
                             bc,
-                            po_info.get("product_name", ""),
-                            po_info.get("product_code", ""),
+                            str(po_info.get("product_name", "")).strip(),
+                            str(po_info.get("product_code", "")).strip(),
                         ] + [""] * (len(PRODUCT_HEADERS) - 3)
                         rows_to_append.append(row)
 
                 wb = openpyxl.load_workbook(PRODUCT_XLSX)
                 ws = wb.active
                 for row in rows_to_append:
-                    ws.append(row)
+                    try:
+                        ws.append(row)
+                    except Exception as e:
+                        print(f"[ERROR] append 실패: {row} → {e}")
                 wb.save(PRODUCT_XLSX)
 
                 QMessageBox.information(
@@ -447,27 +456,27 @@ class OrderApp(QMainWindow):
                 )
                 return
 
+            print("fisrt phase 중간체크4")
+
+            # 1-C. 재고 확인
             try:
+                print("오이")
                 inv_df = load_stock_df(self.business_number)
+                print("5252")
+                if inv_df.empty:
+                    QMessageBox.warning(self, "재고 시트 비어 있음", "현재 재고 시트에 데이터가 없습니다.\n계속 진행은 가능하지만 재고 확인은 생략됩니다.")
             except Exception as e:
-                QMessageBox.critical(self, "재고 확인 오류", str(e))
-                return
+                QMessageBox.warning(self, "재고 확인 경고", f"재고 정보를 불러오는 중 오류 발생: {e}\n재고 확인을 생략하고 계속 진행합니다.")
+                inv_df = pd.DataFrame(columns=["바코드", "수량"])  # 빈 데이터프레임으로 처리
 
-            stock_barcodes = set(inv_df["바코드"].astype(str).str.strip())
-            missing_stock = [bc for bc in needed_barcodes if bc not in stock_barcodes]
-            if missing_stock:
-                print(
-                    self, "재고 미등록",
-                    "다음 바코드는 스프레드시트에 재고가 없습니다.\n"
-                    "주문서에 전량(부족분) 주문으로 반영됩니다:\n"
-                    + "\n".join(missing_stock)
-                )
+            print("fisrt phase 중간체크5")
 
-            # 1-C. Selenium WebDriver 생성 & 로그인
+            # Selenium 로그인
             self.progress.setVisible(True)
             self.progressUpdated.emit(30)
 
-            options = ChromeOptions(); options.add_argument("--start-maximized")
+            options = ChromeOptions()
+            options.add_argument("--start-maximized")
             try:
                 self.driver = webdriver.Chrome(options=options)
             except Exception as e:
@@ -490,7 +499,7 @@ class OrderApp(QMainWindow):
                     self.driver.find_element(By.CSS_SELECTOR, "input[name='password']").send_keys(self.coupang_pw)
                     self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
                 except Exception:
-                    pass  # 자동 로그인 실패 → 수동 로그인
+                    pass  # 수동 로그인 fallback
 
             self.btn_batch.setText("로그인 완료")
             self.btn_batch.clicked.disconnect()
@@ -498,7 +507,7 @@ class OrderApp(QMainWindow):
             self.btn_batch.setEnabled(True)
 
         except Exception as e:
-            print("!!! _first_phase 예외:", e)
+            print("[예외 - first_phase]", e)
             self.crawlError.emit(str(e))
 
     # ──────────────────────────────────────────────────────────
@@ -507,9 +516,12 @@ class OrderApp(QMainWindow):
     def second_phase(self):
         self.btn_batch.setEnabled(False)
         self.progress.setVisible(True)
+        print("세컨드 페이즈 1")
         threading.Thread(target=self.crawl_and_generate).start()
+        print("세컨드 페이즈 2")
 
     def crawl_and_generate(self):
+        print("시작스")
         try:
             driver = self.driver
             self.progressUpdated.emit(30)
@@ -650,7 +662,7 @@ class OrderApp(QMainWindow):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
             headers_3pl = ["브랜드명", "쉽먼트번호", "발주번호", "SKU번호",
-                        "SKU(제품명)", "바코드", "수량", "", "입고예정일", "센터명"]
+                        "SKU(제품명)", "바코드", "수량", "입고예정일", "센터명"]
             rows_3pl = [headers_3pl]
 
             headers_order = ["바코드명", "바코드", "상품코드", "쿠팡납품센터명",
@@ -668,7 +680,7 @@ class OrderApp(QMainWindow):
             ws_order.append(headers_order)
 
             for _, r in df_group.iterrows():
-                bc = r["상품바코드"]
+                bc = safe_strip(r.get("상품바코드"))
                 pname = r["상품이름"]
                 center = r["물류센터"]
                 ship_no = r["Shipment"]
@@ -682,7 +694,8 @@ class OrderApp(QMainWindow):
                     po_no = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
                     product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
 
-                row_3pl = [brand, ship_no, po_no, product_code, pname, bc, qty, "", eta_str, center]
+                row_3pl = [brand, ship_no, po_no, product_code, pname, bc, qty, eta_str, center]
+                
                 rows_3pl.append(row_3pl)
                 ws_3pl.append(row_3pl)
 
@@ -700,7 +713,7 @@ class OrderApp(QMainWindow):
             # ✅ 스프레드시트 전송
             append_to_google_sheet(
                 sheet_id="1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI",
-                sheet_name="3PL (발주봇 업로드)",
+                sheet_name="CALL 요청서",
                 brand=brand,
                 rows=rows_3pl
             )
@@ -710,7 +723,7 @@ class OrderApp(QMainWindow):
                 ws_order.cell(row=2, column=1).value = "재고가 충분하여 주문할 항목이 없습니다."
                 append_to_google_sheet(
                     sheet_id="1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI",
-                    sheet_name="주문서 (발주봇 업로드)",
+                    sheet_name="CALL 주문서",
                     brand=brand,
                     rows=[["재고가 충분하여 주문할 항목이 없습니다."]]
                 )
