@@ -32,9 +32,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-import email.mime.multipart
-import email.mime.text
-import email.mime.base
+
 # --------------------------------------------------------------
 def load_credentials():
     if getattr(sys, 'frozen', False):
@@ -77,22 +75,11 @@ STOCK_SHEET_CSV = (
 ICON_PATH = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
 
 def create_drive_folder(folder_name, parent_id=None):
-    scopes = ["https://www.googleapis.com/auth/drive.file"]
-    creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=scopes)
-    service = build("drive", "v3", credentials=creds)
-
-    file_metadata = {
-        "name": folder_name,
-        "mimeType": "application/vnd.google-apps.folder"
-    }
-    if parent_id:
-        file_metadata["parents"] = [parent_id]
-
-    folder = service.files().create(body=file_metadata, fields="id").execute()
-    return folder.get("id")  # 생성된 폴더 ID 반환
+    # 고정된 공유 폴더 ID 반환
+    return "14jtYGHiUL9sGzm_wt2Gf6oeTjkkoWca8"
 
 def upload_folder_to_drive(folder_path, drive_folder_id):
-    scopes = ["https://www.googleapis.com/auth/drive.file"]
+    scopes = ["https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=scopes)
     service = build("drive", "v3", credentials=creds)
 
@@ -689,9 +676,9 @@ class OrderApp(QMainWindow):
             drive_folder_name = f"shipment_{ts}"
 
             try:
-                drive_folder_id = create_drive_folder(drive_folder_name)
+                drive_folder_id = create_drive_folder("shipment")  # 아무 이름 넣어도 됨
                 upload_folder_to_drive(target_dir, drive_folder_id)
-                print(f"📁 Google Drive 업로드 완료: {drive_folder_name}")
+                print(f"📁 Google Drive 업로드 완료: 공유폴더")
             except Exception as e:
                 print(f"[Google Drive 업로드 실패] {e}")
 
@@ -815,7 +802,7 @@ class OrderApp(QMainWindow):
             else:
                 append_to_google_sheet(
                     sheet_id="1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI",
-                    sheet_name="주문서 (발주봇 업로드)",
+                    sheet_name="CALL 주문서",
                     brand=brand,
                     rows=rows_order
                 )
