@@ -29,8 +29,21 @@ import google.auth.transport.requests
 import google.oauth2.service_account
 from google.oauth2.service_account import Credentials
 
-# --------------------------------------------------------------
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
+# --------------------------------------------------------------
+def load_credentials():
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 실행 중
+        base_dir = sys._MEIPASS
+    else:
+        base_dir = os.path.dirname(__file__)
+    cred_path = os.path.join(base_dir, "google_credentials.json")
+    with open(cred_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+GOOGLE_CREDENTIALS_DICT = load_credentials()
 
 
 # ─── 상수 ─────────────────────────────────────────────────────
@@ -60,6 +73,39 @@ STOCK_SHEET_CSV = (
 
 ICON_PATH = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
 
+def create_drive_folder(folder_name, parent_id=None):
+    scopes = ["https://www.googleapis.com/auth/drive.file"]
+    creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=scopes)
+    service = build("drive", "v3", credentials=creds)
+
+    file_metadata = {
+        "name": folder_name,
+        "mimeType": "application/vnd.google-apps.folder"
+    }
+    if parent_id:
+        file_metadata["parents"] = [parent_id]
+
+    folder = service.files().create(body=file_metadata, fields="id").execute()
+    return folder.get("id")  # 생성된 폴더 ID 반환
+
+def upload_folder_to_drive(folder_path, drive_folder_id):
+    scopes = ["https://www.googleapis.com/auth/drive.file"]
+    creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=scopes)
+    service = build("drive", "v3", credentials=creds)
+
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        if not os.path.isfile(file_path):
+            continue
+
+        file_metadata = {
+            "name": filename,
+            "parents": [drive_folder_id],
+        }
+
+        media = MediaFileUpload(file_path, resumable=True)
+        uploaded = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+        print(f"✔ 업로드 완료: {filename} → Drive File ID: {uploaded['id']}")
 
 def safe_strip(value):
     """None 또는 NaN을 안전하게 처리하여 문자열로 반환"""
@@ -521,7 +567,6 @@ class OrderApp(QMainWindow):
         print("세컨드 페이즈 2")
 
     def crawl_and_generate(self):
-        print("시작스")
         try:
             driver = self.driver
             self.progressUpdated.emit(30)
@@ -606,9 +651,14 @@ class OrderApp(QMainWindow):
                 shutil.move(src, os.path.join(target_dir, fname))
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            zip_path = shutil.make_archive(f"shipment_{ts}", "zip", target_dir)
-            try: shutil.rmtree(target_dir)
-            except Exception as e_del: print(f"[경고] shipment 폴더 삭제 실패: {e_del}")
+            drive_folder_name = f"shipment_{ts}"
+
+            try:
+                drive_folder_id = create_drive_folder(drive_folder_name)
+                upload_folder_to_drive(target_dir, drive_folder_id)
+                print(f"📁 Google Drive 업로드 완료: {drive_folder_name}")
+            except Exception as e:
+                print(f"[Google Drive 업로드 실패] {e}")
 
             driver.quit(); self.driver = None
             self.progressUpdated.emit(100)
