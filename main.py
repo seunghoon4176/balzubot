@@ -336,6 +336,8 @@ class OrderApp(QMainWindow):
             # 1-A. ZIP 해제 및 발주서 파싱
             tmpdir = tempfile.mkdtemp(prefix="order_zip_")
             excel_files = []
+            confirmed_skipped = 0  # 확정본 건수 카운트
+
             with zipfile.ZipFile(self.order_zip_path, 'r') as zf:
                 for zi in zf.infolist():
                     raw = zi.filename.encode('cp437')
@@ -353,11 +355,19 @@ class OrderApp(QMainWindow):
 
                     if real_name.lower().endswith((".xls", ".xlsx")):
                         if is_confirmed_excel(target):   # 확정본은 스킵
-                            os.remove(target); continue
+                            os.remove(target)
+                            confirmed_skipped += 1
+                            continue
                         excel_files.append(target)
 
             if not excel_files:
-                QMessageBox.information(self, "안내", "미확정 발주서가 없습니다.")
+                if confirmed_skipped > 0:
+                    QMessageBox.information(
+                        self, "안내",
+                        f"모든 엑셀 파일이 발주 확정본으로 확인되어 제외되었습니다.\n({confirmed_skipped}건)"
+                    )
+                else:
+                    QMessageBox.information(self, "안내", "미확정 발주서가 없습니다.")
                 return
 
             self.orders_data.clear()
@@ -608,10 +618,12 @@ class OrderApp(QMainWindow):
             sheet = client.open_by_key(sheet_id)
             worksheet = sheet.worksheet(sheet_name)
 
-            brand_marker = [[f"[브랜드명] : {brand}"]]
-            spacer = [[""]]
             content_rows = rows[1:]  # 헤더 제외
-            worksheet.append_rows(spacer + brand_marker + content_rows + spacer, value_input_option="USER_ENTERED")
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for i, row in enumerate(content_rows):
+                row.append(now_str if i == 0 else "")  # 첫 줄에만 시간
+
+            worksheet.append_rows(content_rows, value_input_option="USER_ENTERED")
 
         try:
             inv_df = load_stock_df(self.business_number)
