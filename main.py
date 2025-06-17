@@ -119,20 +119,29 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
         creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
         client = gspread.authorize(creds)
 
-        sheet = client.open_by_key("1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI").worksheet("재고리스트")  # 시트 이름에 따라 변경
+        sheet = client.open_by_key("1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI").worksheet("재고리스트")
         data = sheet.get_all_values()
         df = pd.DataFrame(data[1:], columns=data[0]).fillna("")
 
         biz_col = next((c for c in df.columns if "사업자 번호" in c), None)
         bc_col  = next((c for c in df.columns if "바코드" in c), None)
-        qty_col = next((c for c in df.columns if "수량"   in c), None)
+        qty_col = next((c for c in df.columns if "수량" in c), None)
 
         if not all([biz_col, bc_col, qty_col]):
             print("[재고 시트 오류] 필수 열 누락 - 사업자, 바코드, 수량 중 하나가 없습니다.")
             return pd.DataFrame(columns=["바코드", "수량"])
 
         df = df[df[biz_col].astype(str).str.strip() == biz_num]
-        return df[[bc_col, qty_col]].rename(columns={bc_col: "바코드", qty_col: "수량"})
+        df = df[[bc_col, qty_col]].rename(columns={bc_col: "바코드", qty_col: "수량"})
+
+        # ✅ 엑셀 자동 저장
+        if not df.empty:
+            ts = datetime.now().strftime("%Y%m%d")
+            filename = f"재고_{biz_num}_{ts}.xlsx"
+            df.to_excel(filename, index=False)
+            print(f"[INFO] 재고 파일 저장 완료: {filename}")
+
+        return df
 
     except Exception as e:
         print("[load_stock_df 예외 발생]", e)
