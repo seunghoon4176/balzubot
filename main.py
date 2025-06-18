@@ -32,7 +32,6 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-
 # --------------------------------------------------------------
 def load_credentials():
     if getattr(sys, 'frozen', False):
@@ -74,11 +73,14 @@ STOCK_SHEET_CSV = (
 
 ICON_PATH = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
 
-def find_column(df, keywords):
-    for col in df.columns:
-        col_normalized = col.lower().replace(" ", "").replace("_", "")
-        if any(k in col_normalized for k in keywords):
-            return col
+def find_column(df: pd.DataFrame, keywords: list) -> str | None:
+    # 공백 제거 후 소문자 비교
+    df_columns_cleaned = {col: col.strip().replace(" ", "").lower() for col in df.columns}
+    for keyword in keywords:
+        keyword_clean = keyword.strip().replace(" ", "").lower()
+        for col, clean_col in df_columns_cleaned.items():
+            if keyword_clean in clean_col:
+                return col
     return None
 
 def create_drive_folder(folder_name, parent_id=None):
@@ -112,49 +114,62 @@ def safe_strip(value):
 
 def load_stock_df(biz_num: str) -> pd.DataFrame:
     try:
+        # 구글 인증 처리
         GOOGLE_CREDENTIALS_DICT["private_key"] = GOOGLE_CREDENTIALS_DICT["private_key"].replace("\\n", "\n")
         creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
         client = gspread.authorize(creds)
 
+        # 시트 접근
         sheet = client.open_by_key("1XewDGbcQBcgG-pUdhKCcgtd7RFIUAb3_dpINbuVq7nI")
 
         # ─────────────────────────────
-        # ① 재고리스트 시트
+        # ✅ 재고 리스트 처리
         ws_stock = sheet.worksheet("재고 리스트")
         data_stock = ws_stock.get_all_values()
-        df_stock = pd.DataFrame(data_stock[1:], columns=data_stock[0]).fillna("")
+        header = data_stock[0]
+        records = data_stock[1:]
 
-        biz_col = find_column(df_stock, ["사업자번호", "사업자", "사업자등록번호"])
-        bc_col  = find_column(df_stock, ["바코드", "barcode"])
-        qty_col = find_column(df_stock, ["수량", "재고", "재고수량"])
+        print(f"[DEBUG] 열 개수: {len(header)}")
 
-        if not all([biz_col, bc_col, qty_col]):
-            print("[재고 시트 오류] 필수 열 누락 - 사업자, 바코드, 수량 중 하나가 없습니다.")
-            df_filtered_stock = pd.DataFrame(columns=["바코드", "수량"])
-        else:
-            df_filtered_stock = df_stock[df_stock[biz_col].astype(str).str.strip() == biz_num]
-            df_filtered_stock = df_filtered_stock[[bc_col, qty_col]].rename(columns={bc_col: "바코드", qty_col: "수량"})
+        df_stock = pd.DataFrame(records, columns=header).fillna("")
 
-            # 👉 상품정보와 병합
-            if not df_filtered_stock.empty and os.path.exists(PRODUCT_XLSX):
-                df_product = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
-                df_product = df_product.rename(columns={
-                    "상품바코드": "바코드", 
-                    "상품바코드명": "상품명", 
-                    "상품코드": "SKU"
-                })
+        # 열 이름 유연하게 찾기
+        def find_column(possible_names: list[str]) -> str | None:
+            for key in possible_names:
+                for col in df_stock.columns:
+                    if key.strip().lower() in col.strip().lower():
+                        return col
+            return None
 
-                df_merged = pd.merge(df_filtered_stock, df_product[["바코드", "상품명", "SKU"]], on="바코드", how="left")
-                df_filtered_stock = df_merged[["SKU", "상품명", "바코드", "수량"]]
+        sku_col  = find_column(["SKU", "상품코드"])
+        name_col = find_column(["제품명", "상품명"])
+        bc_col   = find_column(["바코드", "barcode"])
+        qty_col  = find_column(["수량", "재고", "재고수량"])
+        biz_col  = find_column(["사업자 번호", "사업자", "사업자등록번호"])
 
-                # 저장
-                ts = datetime.now().strftime("%Y%m%d")
-                filename = f"재고_{biz_num}_{ts}.xlsx"
-                df_filtered_stock.to_excel(filename, index=False)
-                print(f"[INFO] 재고 저장 완료: {filename}")
+        # 필수 열 확인
+        if not all([sku_col, name_col, bc_col, qty_col, biz_col]):
+            print("[재고 시트 오류] 필수 열 누락 - SKU, 제품명, 바코드, 수량, 사업자번호 중 하나가 없습니다.")
+            return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
+
+        # 사업자 필터링
+        df_filtered = df_stock[df_stock[biz_col].astype(str).str.strip() == biz_num]
+
+        if df_filtered.empty:
+            print(f"[INFO] 재고 시트에 해당 사업자번호 {biz_num} 에 대한 데이터 없음")
+            return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
+
+        df_result = df_filtered[[sku_col, name_col, bc_col, qty_col]]
+        df_result.columns = ["SKU", "상품명", "바코드", "수량"]
+
+        # 저장
+        ts = datetime.now().strftime("%Y%m%d")
+        filename = f"재고_{biz_num}_{ts}.xlsx"
+        df_result.to_excel(filename, index=False)
+        print(f"[INFO] 재고 저장 완료: {filename}")
 
         # ─────────────────────────────
-        # ② 입출고리스트 시트
+        # ✅ 입출고 리스트 처리
         try:
             ws_inout = sheet.worksheet("입출고 리스트")
             data_inout = ws_inout.get_all_values()
@@ -165,18 +180,17 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
                 df_filtered_io = df_inout[df_inout[biz_col_io].astype(str).str.strip() == biz_num]
 
                 if not df_filtered_io.empty:
-                    ts = datetime.now().strftime("%Y%m%d")
                     io_filename = f"입출고리스트_{biz_num}_{ts}.xlsx"
                     df_filtered_io.to_excel(io_filename, index=False)
                     print(f"[INFO] 입출고리스트 저장 완료: {io_filename}")
         except Exception as e_io:
             print(f"[WARN] 입출고리스트 시트 처리 중 오류: {e_io}")
 
-        return df_filtered_stock
+        return df_result
 
     except Exception as e:
         print("[load_stock_df 예외 발생]", type(e), e)
-        return pd.DataFrame(columns=["바코드", "수량"])
+        return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
 
 
 # ─── 설정 다이얼로그 ─────────────────────────────────────────
