@@ -135,8 +135,19 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
             df_filtered_stock = df_stock[df_stock[biz_col].astype(str).str.strip() == biz_num]
             df_filtered_stock = df_filtered_stock[[bc_col, qty_col]].rename(columns={bc_col: "바코드", qty_col: "수량"})
 
-            # 엑셀 저장
-            if not df_filtered_stock.empty:
+            # 👉 상품정보와 병합
+            if not df_filtered_stock.empty and os.path.exists(PRODUCT_XLSX):
+                df_product = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
+                df_product = df_product.rename(columns={
+                    "상품바코드": "바코드", 
+                    "상품바코드명": "상품명", 
+                    "상품코드": "SKU"
+                })
+
+                df_merged = pd.merge(df_filtered_stock, df_product[["바코드", "상품명", "SKU"]], on="바코드", how="left")
+                df_filtered_stock = df_merged[["SKU", "상품명", "바코드", "수량"]]
+
+                # 저장
                 ts = datetime.now().strftime("%Y%m%d")
                 filename = f"재고_{biz_num}_{ts}.xlsx"
                 df_filtered_stock.to_excel(filename, index=False)
