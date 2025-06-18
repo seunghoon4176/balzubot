@@ -74,6 +74,13 @@ STOCK_SHEET_CSV = (
 
 ICON_PATH = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
 
+def find_column(df, keywords):
+    for col in df.columns:
+        col_normalized = col.lower().replace(" ", "").replace("_", "")
+        if any(k in col_normalized for k in keywords):
+            return col
+    return None
+
 def create_drive_folder(folder_name, parent_id=None):
     # 고정된 공유 폴더 ID 반환
     return "14jtYGHiUL9sGzm_wt2Gf6oeTjkkoWca8"
@@ -113,13 +120,13 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
 
         # ─────────────────────────────
         # ① 재고리스트 시트
-        ws_stock = sheet.worksheet("재고리스트")
+        ws_stock = sheet.worksheet("재고 리스트")
         data_stock = ws_stock.get_all_values()
         df_stock = pd.DataFrame(data_stock[1:], columns=data_stock[0]).fillna("")
 
-        biz_col = next((c for c in df_stock.columns if "사업자 번호" in c), None)
-        bc_col  = next((c for c in df_stock.columns if "바코드" in c), None)
-        qty_col = next((c for c in df_stock.columns if "수량" in c), None)
+        biz_col = find_column(df_stock, ["사업자번호", "사업자", "사업자등록번호"])
+        bc_col  = find_column(df_stock, ["바코드", "barcode"])
+        qty_col = find_column(df_stock, ["수량", "재고", "재고수량"])
 
         if not all([biz_col, bc_col, qty_col]):
             print("[재고 시트 오류] 필수 열 누락 - 사업자, 바코드, 수량 중 하나가 없습니다.")
@@ -138,7 +145,7 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
         # ─────────────────────────────
         # ② 입출고리스트 시트
         try:
-            ws_inout = sheet.worksheet("입출고리스트")
+            ws_inout = sheet.worksheet("입출고 리스트")
             data_inout = ws_inout.get_all_values()
             df_inout = pd.DataFrame(data_inout[1:], columns=data_inout[0]).fillna("")
 
@@ -157,7 +164,7 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
         return df_filtered_stock
 
     except Exception as e:
-        print("[load_stock_df 예외 발생]", e)
+        print("[load_stock_df 예외 발생]", type(e), e)
         return pd.DataFrame(columns=["바코드", "수량"])
 
 
@@ -444,7 +451,6 @@ class OrderApp(QMainWindow):
                 return
 
             self.orders_data.clear()
-            print("fisrt phase 중간체크")
 
             for idx, xlsx in enumerate(excel_files):
                 df_raw = pd.read_excel(xlsx, header=None, dtype=str)
@@ -528,16 +534,13 @@ class OrderApp(QMainWindow):
 
             # 1-C. 재고 확인
             try:
-                print("오이")
                 inv_df = load_stock_df(self.business_number)
-                print("5252")
                 if inv_df.empty:
                     QMessageBox.warning(self, "재고 시트 비어 있음", "현재 재고 시트에 데이터가 없습니다.\n계속 진행은 가능하지만 재고 확인은 생략됩니다.")
             except Exception as e:
                 QMessageBox.warning(self, "재고 확인 경고", f"재고 정보를 불러오는 중 오류 발생: {e}\n재고 확인을 생략하고 계속 진행합니다.")
                 inv_df = pd.DataFrame(columns=["바코드", "수량"])  # 빈 데이터프레임으로 처리
 
-            print("fisrt phase 중간체크5")
 
             # Selenium 로그인
             self.progress.setVisible(True)
