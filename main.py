@@ -480,18 +480,15 @@ class OrderApp(QMainWindow):
             for idx, xlsx in enumerate(excel_files):
                 df_raw = pd.read_excel(xlsx, header=None, dtype=str)
                 po_row = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("발주번호", na=False)].index[0]
-                po_no  = str(df_raw.iloc[po_row, 2]).strip()
+                po_no = str(df_raw.iloc[po_row, 2]).strip()
 
                 eta_row = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("입고예정일시", na=False)].index[0] + 1
                 eta_raw = df_raw.iloc[eta_row, 5]
-                eta     = pd.to_datetime(eta_raw, errors="coerce")
-                if pd.isna(eta):
-                    raise ValueError(f"입고예정일시 변환 오류: {eta_raw}")
-                eta = eta.to_pydatetime()
-
+                eta = pd.to_datetime(eta_raw, errors="coerce")
+                eta = eta.to_pydatetime() if not pd.isna(eta) else None
                 center = str(df_raw.iloc[eta_row, 2]).strip()
 
-                df_items = pd.read_excel(xlsx, header=19, dtype=str)
+                df_items = pd.read_excel(xlsx, header=19, dtype=str).fillna("")
                 df_items = df_items.loc[:, ~df_items.columns.str.startswith("Unnamed")]
                 df_items.columns = df_items.columns.str.strip()
 
@@ -500,19 +497,28 @@ class OrderApp(QMainWindow):
                 if not col_product or not col_barcode:
                     raise Exception(f"{os.path.basename(xlsx)}: '상품코드' 또는 'BARCODE' 열 없음")
 
-                product_code = str(df_items.iloc[1][col_product]).strip()
-                product_name = str(df_items.iloc[1][col_barcode]).strip()
-                barcode      = str(df_items.iloc[2][col_barcode]).strip() if len(df_items) > 2 else ""
+                for i in range(len(df_items) - 1):
+                    # 상품코드와 바코드는 번갈아 나오므로 2개 연속된 줄로 묶어서 처리
+                    row_main = df_items.iloc[i]
+                    row_next = df_items.iloc[i + 1]
 
-                self.orders_data[po_no] = {
-                    "barcode":      barcode,
-                    "product_code": product_code,
-                    "product_name": product_name,
-                    "center":       center,
-                    "eta":          eta,
-                    "shipment":     None,
-                    "invoice":      str(random.randint(10**9, 10**10-1))
-                }
+                    product_code = str(row_main.get(col_product, "")).strip()
+                    product_name = str(row_main.get(col_barcode, "")).strip()
+                    barcode      = str(row_next.get(col_barcode, "")).strip()
+
+                    # 필수 값 조건: 바코드와 상품코드가 둘 다 있어야만 유효
+                    if not barcode or not product_code:
+                        continue
+
+                    self.orders_data[f"{po_no}_{barcode}"] = {
+                        "barcode": barcode,
+                        "product_code": product_code,
+                        "product_name": product_name,
+                        "center": center,
+                        "eta": eta,
+                        "shipment": None,
+                        "invoice": str(random.randint(10**9, 10**10 - 1))
+                    }
 
                 pct = int((idx + 1) / len(excel_files) * 30)
                 self.progressUpdated.emit(pct)
