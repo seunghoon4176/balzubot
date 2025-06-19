@@ -4,7 +4,7 @@ from datetime import datetime
 import openpyxl
 import requests
 import pandas as pd
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
     QFileDialog, QHBoxLayout, QVBoxLayout, QMessageBox, QProgressBar, QDialog,
@@ -469,10 +469,63 @@ class OrderApp(QMainWindow):
             for src in excel_files:
                 shutil.copy2(src, self._temp_dir)
 
+            # ✅ 발주 확정 양식 생성
+            records = []
+            for path in excel_files:
+                ws = load_workbook(path, data_only=True).active
+
+                po = ws["C10"].value
+                fc = ws["C13"].value
+                eta_raw = ws["F13"].value
+                eta = (
+                    eta_raw.strftime("%Y-%m-%d")
+                    if hasattr(eta_raw, "strftime")
+                    else re.sub(r"[^\d]", "", str(eta_raw))[:8]
+                )
+                if not (po and fc and eta):
+                    continue
+
+                header_row = next(
+                    (
+                        i
+                        for i in range(1, ws.max_row + 1)
+                        if isinstance(ws.cell(row=i, column=3).value, str)
+                        and "상품명" in ws.cell(row=i, column=3).value
+                    ),
+                    None,
+                )
+                if header_row is None:
+                    continue
+
+                for r in range(header_row + 1, ws.max_row + 1):
+                    pname = ws.cell(row=r, column=3).value
+                    if pname is None:
+                        continue
+                    sku = ws.cell(row=r, column=2).value
+                    qty = ws.cell(row=r, column=7).value
+                    records.append({
+                        "발주번호": str(po).strip(),
+                        "상품바코드": "",
+                        "상품이름": str(pname).strip(),
+                        "물류센터": str(fc).strip(),
+                        "입고예정일": eta,
+                        "상품번호": str(sku).strip() if sku else "",
+                        "확정수량": int(qty) if qty else 0
+                    })
+
+            if not records:
+                QMessageBox.warning(self, "경고", "발주 확정 양식에 들어갈 데이터가 없습니다.")
+                return False
+
+            df = pd.DataFrame(records)
+            df.to_excel("발주 확정 양식.xlsx", index=False)
+            print("✅ 발주 확정 양식.xlsx 저장 완료")
+
             return True
 
         except Exception as e:
             print("Zero Phase 오류:", e)
+            QMessageBox.critical(self, "오류", f"Zero Phase 중 오류 발생: {e}")
             return False
 
     # 1) 발주서 파싱 + 바코드 검증 + Selenium --------------------------------
@@ -657,9 +710,8 @@ class OrderApp(QMainWindow):
     def second_phase(self):
         self.btn_batch.setEnabled(False)
         self.progress.setVisible(True)
-        print("세컨드 페이즈 1")
         threading.Thread(target=self.crawl_and_generate).start()
-        print("세컨드 페이즈 2")
+
 
     def crawl_and_generate(self):
         try:
@@ -921,7 +973,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.4"
+        LOCAL_VERSION = "1.0.5"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
