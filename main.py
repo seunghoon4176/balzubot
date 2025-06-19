@@ -20,7 +20,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # ZIP 전처리 모듈
-from order_processor import process_order_zip, is_confirmed_excel
+from order_processor import process_order_folder, is_confirmed_excel
 import subprocess
 
 import gspread
@@ -427,16 +427,43 @@ class OrderApp(QMainWindow):
     # 파이프라인 시작
     # ──────────────────────────────────────────────────────────
     def _run_pipeline(self):
-        # 0) 상품정보 엑셀 확인
-        if not os.path.exists(PRODUCT_XLSX):
-            wb = Workbook(); wb.active.title = "상품정보"; wb.active.append(PRODUCT_HEADERS)
-            wb.save(PRODUCT_XLSX)
-            QMessageBox.information(
-                self, "상품정보 템플릿 생성",
-                "상품정보.xlsx 파일이 없어 템플릿을 만들었습니다.\n"
-                "상품 데이터를 입력한 뒤 다시 실행해 주세요."
-            )
-            return
+        try:
+            # ✅ 1. 상품정보 템플릿이 없으면 자동 생성
+            if not os.path.exists(PRODUCT_XLSX):
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "상품정보"
+                ws.append(PRODUCT_HEADERS)
+                wb.save(PRODUCT_XLSX)
+
+                QMessageBox.information(
+                    self, "상품정보 템플릿 생성",
+                    "상품정보.xlsx 파일이 없어 템플릿을 생성했습니다.\n"
+                    "정보를 채워 넣은 뒤 다시 실행해 주세요."
+                )
+                return
+
+            # ✅ 2. 확정본 제외 후 임시 폴더 생성
+            if not self._zero_phase():
+                return
+
+            # ✅ 3. 임시 폴더 내 파일 처리 (발주확정 양식 + 쉽먼트)
+            result = process_order_folder(self._temp_dir)
+
+            # ✅ 4. 결과 알림
+            if result["failures"]:
+                QMessageBox.warning(
+                    self, "실패",
+                    f"처리 실패 파일:\n\n" + "\n".join(result["failures"])
+                )
+            else:
+                QMessageBox.information(
+                    self, "완료",
+                    "발주 확정 양식 및 쉽먼트 양식 생성 완료!"
+                )
+
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"처리 중 오류:\n{e}")
 
         if self._zero_phase():       # ZIP 해제·발주서 추출
             self._first_phase()      # 바코드 검증 → Selenium 실행 준비
@@ -921,7 +948,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.4"
+        LOCAL_VERSION = "1.0.6"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
