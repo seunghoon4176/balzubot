@@ -413,10 +413,10 @@ class OrderApp(QMainWindow):
 
     # UI slots ----------------------------------------------------------
     def _pick_zip(self):
-        p, _ = QFileDialog.getOpenFileName(self, "발주 ZIP 선택", "", "ZIP Files (*.zip)")
-        if p:
-            self.order_zip_path = p
-            self.le_zip.setText(p)
+        dir_path = QFileDialog.getExistingDirectory(self, "발주 폴더 선택", "")
+        if dir_path:
+            self.order_zip_path = dir_path
+            self.le_zip.setText(dir_path)
 
     def _open_settings(self):
         if SettingsDialog(self).exec() == QDialog.Accepted:
@@ -443,12 +443,29 @@ class OrderApp(QMainWindow):
     # 0) ZIP 전처리 ------------------------------------------------------
     def _zero_phase(self):
         try:
-            res = process_order_zip(self.order_zip_path)
-            if res["failures"]:
-                QMessageBox.warning(self, "주의", "일부 파일 처리 실패:\n" + "\n".join(res["failures"]))
-            else:
-                QMessageBox.information(self, "Zero Phase", "ZIP 파일 처리 완료.")
+            # ZIP 대신 폴더에서 엑셀 수집
+            base_dir = self.order_zip_path
+            if not os.path.isdir(base_dir):
+                raise Exception("유효한 폴더 경로가 아닙니다.")
+
+            excel_files = []
+            for root, _, files in os.walk(base_dir):
+                for file in files:
+                    if file.lower().endswith((".xls", ".xlsx")):
+                        full_path = os.path.join(root, file)
+                        if is_confirmed_excel(full_path):
+                            continue
+                        excel_files.append(full_path)
+
+            if not excel_files:
+                QMessageBox.information(self, "안내", "미확정 발주서가 없습니다.")
+                return False
+
+            self._collected_excel_files = excel_files  # 후속 단계에서 사용
+
+            QMessageBox.information(self, "Zero Phase", f"{len(excel_files)}개 발주서 수집 완료.")
             return True
+
         except Exception as e:
             print("Zero Phase 오류:", e)
             return False
@@ -456,11 +473,13 @@ class OrderApp(QMainWindow):
     # 1) 발주서 파싱 + 바코드 검증 + Selenium --------------------------------
     def _first_phase(self):
         try:
-            print("first phase 시작")
 
             # 1-A. ZIP 해제 및 발주서 파싱
             tmpdir = tempfile.mkdtemp(prefix="order_zip_")
-            excel_files = []
+            excel_files = getattr(self, "_collected_excel_files", [])
+            if not excel_files:
+                QMessageBox.warning(self, "오류", "처리할 엑셀 파일이 없습니다.")
+                return
             confirmed_skipped = 0
 
             with zipfile.ZipFile(self.order_zip_path, 'r') as zf:
@@ -927,7 +946,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.3"
+        LOCAL_VERSION = "1.0.4"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
