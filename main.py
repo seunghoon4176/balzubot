@@ -438,7 +438,7 @@ class OrderApp(QMainWindow):
     # 1) 발주서 파싱 + 바코드 검증 + Selenium --------------------------------
     def _first_phase(self):
         try:
-            print("fisrt phase 시작")
+            print("first phase 시작")
 
             # 1-A. ZIP 해제 및 발주서 파싱
             tmpdir = tempfile.mkdtemp(prefix="order_zip_")
@@ -491,71 +491,106 @@ class OrderApp(QMainWindow):
 
                 center = str(df_raw.iloc[eta_row, 2]).strip()
 
-                df_items = pd.read_excel(xlsx, header=19, dtype=str)
+                df_items = pd.read_excel(xlsx, header=19, dtype=str).fillna("")
                 df_items = df_items.loc[:, ~df_items.columns.str.startswith("Unnamed")]
                 df_items.columns = df_items.columns.str.strip()
 
-                col_product = next((c for c in df_items.columns if "상품코드" in c or "품번" in c), None)
-                col_barcode = next((c for c in df_items.columns if "BARCODE" in c.upper()), None)
-                if not col_product or not col_barcode:
-                    raise Exception(f"{os.path.basename(xlsx)}: '상품코드' 또는 'BARCODE' 열 없음")
+                col_barcode = next((c for c in df_items.columns if "BARCODE" in c.upper() or "바코드" in c), None)
+                if not col_barcode:
+                    continue
 
-                product_code = str(df_items.iloc[1][col_product]).strip()
-                product_name = str(df_items.iloc[1][col_barcode]).strip()
-                barcode      = str(df_items.iloc[2][col_barcode]).strip() if len(df_items) > 2 else ""
+                rows = df_items[col_barcode].tolist()
+                valid_pairs = []
+                i = 0
+                while i < len(rows) - 1:
+                    name = str(rows[i]).strip()
+                    barcode = str(rows[i + 1]).strip()
+                    if barcode.startswith("R"):
+                        valid_pairs.append((name, barcode))
+                        i += 2
+                    else:
+                        i += 1
 
-                self.orders_data[po_no] = {
-                    "barcode":      barcode,
-                    "product_code": product_code,
-                    "product_name": product_name,
-                    "center":       center,
-                    "eta":          eta,
-                    "shipment":     None,
-                    "invoice":      str(random.randint(10**9, 10**10-1))
-                }
+                for product_name, barcode in valid_pairs:
+                    if not barcode:
+                        continue
+
+                    if po_no not in self.orders_data:
+                        self.orders_data[po_no] = {
+                            "barcode":      barcode,
+                            "product_code": "",
+                            "product_name": product_name,
+                            "center":       center,
+                            "eta":          eta,
+                            "shipment":     None,
+                            "invoice":      str(random.randint(10**9, 10**10-1))
+                        }
 
                 pct = int((idx + 1) / len(excel_files) * 30)
                 self.progressUpdated.emit(pct)
 
-            print("fisrt phase 중간체크3")
+            print("first phase 중간체크3")
 
-            # 1-B. 상품정보.xlsx 바코드 검증 및 누락 자동 추가
+            # 🔍 상품정보 바코드 누락 자동 추가 (orders_data 안 씀)
             prod_df = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
             if "상품바코드" not in prod_df.columns:
                 raise Exception("상품정보.xlsx에 '상품바코드' 열이 없습니다.")
 
             known_barcodes = set(prod_df["상품바코드"].astype(str).str.strip().str.lower())
-            needed_barcodes = {str(v["barcode"]).strip().lower() for v in self.orders_data.values()}
-            missing = [bc for bc in needed_barcodes if bc not in known_barcodes]
+            new_barcodes = []
 
-            if missing:
-                rows_to_append = []
-                for po_info in self.orders_data.values():
-                    bc = str(po_info.get("barcode", "")).strip()
-                    if bc.lower() in missing:
-                        row = [
-                            bc,
-                            str(po_info.get("product_name", "")).strip(),
-                            str(po_info.get("product_code", "")).strip(),
-                        ] + [""] * (len(PRODUCT_HEADERS) - 3)
-                        rows_to_append.append(row)
+            for xlsx in excel_files:
+                df_items = pd.read_excel(xlsx, header=19, dtype=str).fillna("")
+                df_items = df_items.loc[:, ~df_items.columns.str.startswith("Unnamed")]
+                df_items.columns = df_items.columns.str.strip()
 
+                col_barcode = next((c for c in df_items.columns if "BARCODE" in c.upper() or "바코드" in c), None)
+                if not col_barcode:
+                    continue
+
+                rows = df_items[col_barcode].tolist()
+                valid_pairs = []
+                i = 0
+                while i < len(rows) - 1:
+                    name = str(rows[i]).strip()
+                    barcode = str(rows[i + 1]).strip()
+                    if barcode.startswith("R"):
+                        valid_pairs.append((name, barcode))
+                        i += 2
+                    else:
+                        i += 1
+
+                for product_name, barcode in valid_pairs:
+                    if not barcode:
+                        continue
+                    bc_lower = barcode.lower()
+                    if bc_lower not in known_barcodes:
+                        new_barcodes.append((barcode, product_name))
+
+            # ✅ 중복 제거
+            added = set()
+            rows_to_append = []
+            for barcode, name in new_barcodes:
+                bc_lower = barcode.lower()
+                if bc_lower not in added:
+                    row = [barcode, name, ""] + [""] * (len(PRODUCT_HEADERS) - 3)
+                    rows_to_append.append(row)
+                    added.add(bc_lower)
+
+            if rows_to_append:
                 wb = openpyxl.load_workbook(PRODUCT_XLSX)
                 ws = wb.active
                 for row in rows_to_append:
-                    try:
-                        ws.append(row)
-                    except Exception as e:
-                        print(f"[ERROR] append 실패: {row} → {e}")
+                    ws.append(row)
                 wb.save(PRODUCT_XLSX)
 
                 QMessageBox.information(
                     self, "상품정보 자동 추가",
-                    "상품정보.xlsx에 누락된 항목을 자동으로 추가했습니다.\n내용 확인 후 다시 실행해주세요."
+                    f"{len(rows_to_append)}개 바코드를 상품정보.xlsx에 자동으로 추가했습니다.\n내용 확인 후 다시 실행해주세요."
                 )
                 return
 
-            print("fisrt phase 중간체크4")
+            print("first phase 중간체크4")
 
             # 1-C. 재고 확인
             try:
@@ -564,8 +599,6 @@ class OrderApp(QMainWindow):
                     QMessageBox.warning(self, "재고 시트 비어 있음", "현재 재고 시트에 데이터가 없습니다.\n계속 진행은 가능하지만 재고 확인은 생략됩니다.")
             except Exception as e:
                 QMessageBox.warning(self, "재고 확인 경고", f"재고 정보를 불러오는 중 오류 발생: {e}\n재고 확인을 생략하고 계속 진행합니다.")
-                inv_df = pd.DataFrame(columns=["바코드", "수량"])  # 빈 데이터프레임으로 처리
-
 
             # Selenium 로그인
             self.progress.setVisible(True)
@@ -595,7 +628,7 @@ class OrderApp(QMainWindow):
                     self.driver.find_element(By.CSS_SELECTOR, "input[name='password']").send_keys(self.coupang_pw)
                     self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
                 except Exception:
-                    pass  # 수동 로그인 fallback
+                    pass
 
             self.btn_batch.setText("로그인 완료")
             self.btn_batch.clicked.disconnect()
@@ -876,7 +909,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.1"
+        LOCAL_VERSION = "1.0.2"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
