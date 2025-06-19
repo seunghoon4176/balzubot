@@ -368,6 +368,12 @@ class OrderApp(QMainWindow):
         self.btn_run.setEnabled(False); row_run.addWidget(self.btn_run)
         self.btn_batch = self.btn_run
 
+        row_download = QHBoxLayout()
+        btn_download = QPushButton("재고/입출고 다운로드")
+        btn_download.clicked.connect(self._download_stock_io)
+        row_download.addWidget(btn_download)
+        lay.addLayout(row_download)
+
         # progress
         self.progress = QProgressBar(); self.progress.setRange(0, 100); self.progress.setVisible(False)
 
@@ -377,7 +383,19 @@ class OrderApp(QMainWindow):
         for w in (self.le_zip, self.le_brand): w.textChanged.connect(self._enable_run)
 
 
-
+    def _download_stock_io(self):
+        if not self.business_number:
+            QMessageBox.warning(self, "사업자번호 없음", "먼저 설정에서 사업자번호를 입력하세요.")
+            return
+        try:
+            result_df = load_stock_df(self.business_number)
+            if result_df.empty:
+                QMessageBox.information(self, "완료", "해당 사업자의 재고 데이터가 없습니다.")
+            else:
+                QMessageBox.information(self, "완료", "재고 및 입출고 리스트 다운로드가 완료되었습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"다운로드 중 오류 발생: {e}")
+            
     def _enable_run(self):
         self.btn_run.setEnabled(bool(self.le_zip.text() and self.le_brand.text() and self.business_number))
 
@@ -909,7 +927,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.2"
+        LOCAL_VERSION = "1.0.3"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
