@@ -350,7 +350,8 @@ class OrderApp(QMainWindow):
         # ZIP
         row_zip = QHBoxLayout(); row_zip.addWidget(QLabel("발주 ZIP:"))
         self.le_zip = QLineEdit(); self.le_zip.setReadOnly(True)
-        btn_zip = QPushButton("파일 선택"); btn_zip.clicked.connect(self._pick_zip)
+        btn_zip = QPushButton("폴더 선택")
+        btn_zip.clicked.connect(self._pick_order_folder)
         row_zip.addWidget(self.le_zip); row_zip.addWidget(btn_zip)
 
         # 브랜드
@@ -412,11 +413,11 @@ class OrderApp(QMainWindow):
         self._enable_run()
 
     # UI slots ----------------------------------------------------------
-    def _pick_zip(self):
-        p, _ = QFileDialog.getOpenFileName(self, "발주 ZIP 선택", "", "ZIP Files (*.zip)")
-        if p:
-            self.order_zip_path = p
-            self.le_zip.setText(p)
+    def _pick_order_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "발주서 폴더 선택")
+        if folder:
+            self.order_zip_path = folder  # 변수명 그대로 사용해도 무방
+            self.le_zip.setText(folder)
 
     def _open_settings(self):
         if SettingsDialog(self).exec() == QDialog.Accepted:
@@ -443,12 +444,33 @@ class OrderApp(QMainWindow):
     # 0) ZIP 전처리 ------------------------------------------------------
     def _zero_phase(self):
         try:
-            res = process_order_zip(self.order_zip_path)
-            if res["failures"]:
-                QMessageBox.warning(self, "주의", "일부 파일 처리 실패:\n" + "\n".join(res["failures"]))
-            else:
-                QMessageBox.information(self, "Zero Phase", "ZIP 파일 처리 완료.")
+            excel_files = []
+            confirmed_skipped = 0
+
+            for root, _, files in os.walk(self.order_zip_path):
+                for fname in files:
+                    if fname.lower().endswith((".xls", ".xlsx")):
+                        full_path = os.path.join(root, fname)
+                        if is_confirmed_excel(full_path):
+                            confirmed_skipped += 1
+                            continue
+                        excel_files.append(full_path)
+
+            if not excel_files:
+                msg = (
+                    f"모든 엑셀 파일이 발주 확정본으로 제외되었습니다. ({confirmed_skipped}건)"
+                    if confirmed_skipped > 0 else "미확정 발주서가 없습니다."
+                )
+                QMessageBox.information(self, "안내", msg)
+                return False
+
+            # 선택된 엑셀 파일들을 임시 폴더에 복사 (기존 흐름 유지)
+            self._temp_dir = tempfile.mkdtemp(prefix="order_folder_")
+            for src in excel_files:
+                shutil.copy2(src, self._temp_dir)
+
             return True
+
         except Exception as e:
             print("Zero Phase 오류:", e)
             return False
@@ -458,42 +480,14 @@ class OrderApp(QMainWindow):
         try:
             print("first phase 시작")
 
-            # 1-A. ZIP 해제 및 발주서 파싱
-            tmpdir = tempfile.mkdtemp(prefix="order_zip_")
+            # 1-A. 폴더 내 엑셀 파일 로드
             excel_files = []
-            confirmed_skipped = 0
-
-            with zipfile.ZipFile(self.order_zip_path, 'r') as zf:
-                for zi in zf.infolist():
-                    raw = zi.filename.encode('cp437')
-                    try:
-                        real_name = raw.decode('cp949')
-                    except UnicodeDecodeError:
-                        real_name = zi.filename
-                    if real_name.endswith("/"):
-                        continue
-
-                    target = os.path.join(tmpdir, real_name)
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    with zf.open(zi) as src, open(target, 'wb') as dst:
-                        dst.write(src.read())
-
-                    if real_name.lower().endswith((".xls", ".xlsx")):
-                        if is_confirmed_excel(target):
-                            os.remove(target)
-                            confirmed_skipped += 1
-                            continue
-                        excel_files.append(target)
-
-            if not excel_files:
-                msg = (
-                    f"모든 엑셀 파일이 발주 확정본으로 제외되었습니다. ({confirmed_skipped}건)"
-                    if confirmed_skipped > 0 else "미확정 발주서가 없습니다."
-                )
-                QMessageBox.information(self, "안내", msg)
-                return
+            for fname in os.listdir(self._temp_dir):
+                if fname.lower().endswith((".xls", ".xlsx")):
+                    excel_files.append(os.path.join(self._temp_dir, fname))
 
             self.orders_data.clear()
+            confirmed_skipped = 0
 
             for idx, xlsx in enumerate(excel_files):
                 df_raw = pd.read_excel(xlsx, header=None, dtype=str)
@@ -927,7 +921,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.3"
+        LOCAL_VERSION = "1.0.4"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
