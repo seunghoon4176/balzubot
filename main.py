@@ -810,7 +810,7 @@ class OrderApp(QMainWindow):
 
             driver.quit(); self.driver = None
             self.progressUpdated.emit(100)
-            self.crawlFinished.emit("발주확정 파일(라벨·매니페스트)이 모두 생성되었습니다.")
+            self.crawlFinished.emit("전송 완료!")
 
         except Exception as e:
             print("crawl_and_generate 예외 발생:", e)
@@ -949,9 +949,16 @@ class OrderApp(QMainWindow):
     # 크롤 완료/오류 콜백 및 버튼 리셋
     # ──────────────────────────────────────────────────────────
     def _crawl_ok(self, msg: str):
-        self.progress.setVisible(False); QMessageBox.information(self, "크롤 완료", msg)
-        try: self.generate_orders()
-        except Exception as e: QMessageBox.critical(self, "주문서 오류", str(e))
+        self.progress.setVisible(False)
+
+        try:
+            self.generate_orders()               # ← 모든 실질 작업의 마지막 단계
+            QMessageBox.information(             # 여기서 최종 알림
+                self, "완료", "모든 작업이 끝났습니다!"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "주문서 오류", str(e))
+
         self._reset_btn()
 
     def _crawl_err(self, msg: str):
@@ -971,7 +978,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.6"
+        LOCAL_VERSION = "1.0.7"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
