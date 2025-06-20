@@ -32,7 +32,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# --------------------------------------------------------------
+#Google Credential Files
 def load_credentials():
     if getattr(sys, 'frozen', False):
         # PyInstaller 실행 중
@@ -45,7 +45,32 @@ def load_credentials():
 
 GOOGLE_CREDENTIALS_DICT = load_credentials()
 
+_GSP_CLIENT = None 
 
+def get_gspread_client():
+    """gspread.Client를 1회만 초기화해 재사용"""
+    global _GSP_CLIENT
+    if _GSP_CLIENT is None:               # 아직 없으면 → 생성
+        GOOGLE_CREDENTIALS_DICT["private_key"] = GOOGLE_CREDENTIALS_DICT["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            GOOGLE_CREDENTIALS_DICT,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        _GSP_CLIENT = gspread.authorize(creds)
+    return _GSP_CLIENT
+
+_DRIVE_SERVICE = None
+
+def get_drive_service():
+    global _DRIVE_SERVICE
+    if _DRIVE_SERVICE is None:
+        GOOGLE_CREDENTIALS_DICT["private_key"] = GOOGLE_CREDENTIALS_DICT["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            GOOGLE_CREDENTIALS_DICT,
+            scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        _DRIVE_SERVICE = build("drive", "v3", credentials=creds)
+    return _DRIVE_SERVICE
 # ─── 상수 ─────────────────────────────────────────────────────
 CONFIG_FILE   = "config.json"
 
@@ -88,9 +113,7 @@ def create_drive_folder(folder_name, parent_id=None):
     return "1onRPHGHDSAva4bQB6kjxQ5Z1v1SJ12xo"
 
 def upload_folder_to_drive(folder_path, drive_folder_id):
-    scopes = ["https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=scopes)
-    service = build("drive", "v3", credentials=creds)
+    service = get_drive_service()   # 재사용!
 
     for filename in os.listdir(folder_path):
         file_path = os.path.join(folder_path, filename)
@@ -115,9 +138,7 @@ def safe_strip(value):
 def load_stock_df(biz_num: str) -> pd.DataFrame:
     try:
         # 구글 인증 처리
-        GOOGLE_CREDENTIALS_DICT["private_key"] = GOOGLE_CREDENTIALS_DICT["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
-        client = gspread.authorize(creds)
+        client = get_gspread_client()
 
         # 시트 접근
         sheet = client.open_by_key("1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4")
@@ -428,14 +449,11 @@ class OrderApp(QMainWindow):
     # ──────────────────────────────────────────────────────────
     def _run_pipeline(self):
         try:
-            # ✅ 1. 상품정보 템플릿이 없으면 자동 생성
+            # 1) 상품정보 템플릿 확인 ────────────────
             if not os.path.exists(PRODUCT_XLSX):
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "상품정보"
-                ws.append(PRODUCT_HEADERS)
+                wb = Workbook(); ws = wb.active
+                ws.title = "상품정보"; ws.append(PRODUCT_HEADERS)
                 wb.save(PRODUCT_XLSX)
-
                 QMessageBox.information(
                     self, "상품정보 템플릿 생성",
                     "상품정보.xlsx 파일이 없어 템플릿을 생성했습니다.\n"
@@ -443,30 +461,38 @@ class OrderApp(QMainWindow):
                 )
                 return
 
-            # ✅ 2. 확정본 제외 후 임시 폴더 생성
+            # 2) 미확정 발주서만 복사해 임시 폴더 생성 ─
             if not self._zero_phase():
-                return
+                return                      # 실패 시 바로 종료
 
-            # ✅ 3. 임시 폴더 내 파일 처리 (발주확정 양식 + 쉽먼트)
+            # 3) 발주확정·쉽먼트 양식 생성 ─────────────
             result = process_order_folder(self._temp_dir)
 
-            # ✅ 4. 결과 알림
+            # 4) 결과 알림 ────────────────────────────
             if result["failures"]:
                 QMessageBox.warning(
                     self, "실패",
-                    f"처리 실패 파일:\n\n" + "\n".join(result["failures"])
+                    "처리 실패 파일:\n\n" + "\n".join(result["failures"])
                 )
             else:
                 QMessageBox.information(
                     self, "완료",
-                    "발주 확정 양식 및 쉽먼트 양식 생성 완료!"
+                    "파일 생성 완료!"
                 )
+
+            # 5) 다음 단계로 바로 진행  ❗❗
+            self._first_phase()             # ← 두 번째 _zero_phase() 삭제
 
         except Exception as e:
             QMessageBox.critical(self, "오류", f"처리 중 오류:\n{e}")
 
-        if self._zero_phase():       # ZIP 해제·발주서 추출
-            self._first_phase()      # 바코드 검증 → Selenium 실행 준비
+        finally:
+            # 임시 폴더 깔끔하게 삭제(선택) -------------
+            try:
+                if hasattr(self, "_temp_dir") and os.path.isdir(self._temp_dir):
+                    shutil.rmtree(self._temp_dir)
+            except Exception:
+                pass
 
     # 0) ZIP 전처리 ------------------------------------------------------
     def _zero_phase(self):
@@ -795,10 +821,8 @@ class OrderApp(QMainWindow):
     # ──────────────────────────────────────────────────────────
     def generate_orders(self):
 
-        def append_to_google_sheet(sheet_id: str, sheet_name: str, brand: str, rows: list[list[str]]):
-            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-            creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_DICT, scopes=scopes)
-            client = gspread.authorize(creds)
+        def append_to_google_sheet(sheet_id: str, sheet_name: str, rows: list[list[str]]):
+            client = get_gspread_client()  
             sheet = client.open_by_key(sheet_id)
             worksheet = sheet.worksheet(sheet_name)
 
@@ -834,7 +858,7 @@ class OrderApp(QMainWindow):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
             headers_3pl = ["브랜드명", "쉽먼트번호", "발주번호", "SKU번호",
-                        "SKU(제품명)", "바코드", "수량", "입고예정일", "센터명"]
+                        "SKU(제품명)", "바코드", "수량", "입고예정일", "센터명", "사업자번호" ]
             rows_3pl = [headers_3pl]
 
             headers_order = ["바코드명", "바코드", "상품코드", "쿠팡납품센터명",
@@ -851,6 +875,8 @@ class OrderApp(QMainWindow):
             ws_order.title = "주문서"
             ws_order.append(headers_order)
 
+            biz_num = self.business_number.strip()
+
             for _, r in df_group.iterrows():
                 bc = safe_strip(r.get("상품바코드"))
                 pname = r["상품이름"]
@@ -866,7 +892,7 @@ class OrderApp(QMainWindow):
                     po_no = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
                     product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
 
-                row_3pl = [brand, ship_no, po_no, product_code, pname, bc, qty, eta_str, center]
+                row_3pl = [brand, ship_no, po_no, product_code, pname, bc, qty, eta_str, center, biz_num]
                 
                 rows_3pl.append(row_3pl)
                 ws_3pl.append(row_3pl)
@@ -886,7 +912,6 @@ class OrderApp(QMainWindow):
             append_to_google_sheet(
                 sheet_id="1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4",
                 sheet_name="CALL 요청서",
-                brand=brand,
                 rows=rows_3pl
             )
 
@@ -896,14 +921,12 @@ class OrderApp(QMainWindow):
                 append_to_google_sheet(
                     sheet_id="1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4",
                     sheet_name="CALL 주문서",
-                    brand=brand,
                     rows=[["재고가 충분하여 주문할 항목이 없습니다."]]
                 )
             else:
                 append_to_google_sheet(
                     sheet_id="1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4",
                     sheet_name="CALL 주문서",
-                    brand=brand,
                     rows=rows_order
                 )
 
