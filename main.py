@@ -19,7 +19,7 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# ZIP 전처리 모듈
+
 from order_processor import process_order_folder, is_confirmed_excel
 import subprocess
 
@@ -369,7 +369,7 @@ class OrderApp(QMainWindow):
         lay = QVBoxLayout(cen)
 
         # ZIP
-        row_zip = QHBoxLayout(); row_zip.addWidget(QLabel("발주 ZIP:"))
+        row_zip = QHBoxLayout(); row_zip.addWidget(QLabel("폴더 경로:"))
         self.le_zip = QLineEdit(); self.le_zip.setReadOnly(True)
         btn_zip = QPushButton("폴더 선택")
         btn_zip.clicked.connect(self._pick_order_folder)
