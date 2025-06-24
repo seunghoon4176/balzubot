@@ -594,8 +594,6 @@ class OrderApp(QMainWindow):
                 pct = int((idx + 1) / len(excel_files) * 30)
                 self.progressUpdated.emit(pct)
 
-            print("first phase 중간체크3")
-
             # 🔍 상품정보 바코드 누락 자동 추가 (orders_data 안 씀)
             prod_df = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
             if "상품바코드" not in prod_df.columns:
