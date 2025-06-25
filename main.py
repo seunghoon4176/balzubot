@@ -799,7 +799,7 @@ class OrderApp(QMainWindow):
                 upload_folder_to_drive(target_dir, drive_folder_id)
                 print(f"📁 Google Drive 업로드 완료: 공유폴더")
             except Exception as e:
-                print(f"[Google Drive 업로드 실패] {e}")
+                raise RuntimeError(f"Google Drive 업로드 실패: {e}") from e
 
             driver.quit(); self.driver = None
             self.progressUpdated.emit(100)
