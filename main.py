@@ -110,7 +110,7 @@ def find_column(df: pd.DataFrame, keywords: list) -> str | None:
 
 def create_drive_folder(folder_name, parent_id=None):
     # 고정된 공유 폴더 ID 반환
-    return "1onRPHGHDSAva4bQB6kjxQ5Z1v1SJ12xo"
+    return "0AIUiN0FF2S3SUk9PVA"
 
 def upload_folder_to_drive(folder_path, drive_folder_id):
     service = get_drive_service()   # 재사용!
