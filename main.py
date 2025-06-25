@@ -126,7 +126,12 @@ def upload_folder_to_drive(folder_path, drive_folder_id):
         }
 
         media = MediaFileUpload(file_path, resumable=True)
-        uploaded = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+        uploaded = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True  # ✅ 이거 추가
+        ).execute()
         print(f"✔ 업로드 완료: {filename} → Drive File ID: {uploaded['id']}")
 
 def safe_strip(value):
