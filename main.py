@@ -531,7 +531,6 @@ class OrderApp(QMainWindow):
     # 1) 발주서 파싱 + 바코드 검증 + Selenium --------------------------------
     def _first_phase(self):
         try:
-            print("first phase 시작")
 
             # 1-A. 폴더 내 엑셀 파일 로드
             excel_files = []
@@ -708,9 +707,7 @@ class OrderApp(QMainWindow):
     def second_phase(self):
         self.btn_batch.setEnabled(False)
         self.progress.setVisible(True)
-        print("세컨드 페이즈 1")
         threading.Thread(target=self.crawl_and_generate).start()
-        print("세컨드 페이즈 2")
 
     def crawl_and_generate(self):
         try:
