@@ -652,8 +652,6 @@ class OrderApp(QMainWindow):
                 )
                 return
 
-            print("first phase 중간체크4")
-
             # 1-C. 재고 확인
             try:
                 inv_df = load_stock_df(self.business_number)
