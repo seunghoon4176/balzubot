@@ -144,6 +144,33 @@ def safe_strip(value):
         return ""
     return str(value).strip()
 
+def load_purchase_price_map(list_path: str) -> dict[str, str]:
+    """발주서리스트_*.xlsx → {바코드: 매입가(공급가 블록)}"""
+    # 1) 원본 읽기 ─ 헤더 없음으로 읽고 18행을 진짜 헤더로 지정
+    df_raw = pd.read_excel(list_path, dtype=str, header=None).fillna("")
+    header_row = 18
+    df_raw.columns = df_raw.iloc[header_row]
+    df = df_raw.iloc[header_row + 1:].reset_index(drop=True)
+
+    # 2) 열 찾기 ---------------------------------------------------------
+    col_bar = next(c for c in df.columns
+                   if "BARCODE" in str(c).upper() or "바코드" in str(c))
+
+    # (1) 모든 매입가 열을 모으고
+    cost_cols = [c for c in df.columns if str(c).startswith("매입가")]
+    # (2) 가장 왼쪽(=index 0) 열을 사용
+    col_cost = cost_cols[0]   # '매입가'  ← suffix 없는 첫 열
+
+    price_map = {}
+    # 3) 바로 아래줄이 바코드인 구조 활용
+    for idx in range(1, len(df)):
+        bar = str(df.at[idx, col_bar]).strip()
+        if bar.startswith("R"):
+            purchase = str(df.at[idx - 1, col_cost]).strip()
+            price_map[bar] = purchase
+
+    return price_map
+
 def load_stock_df(biz_num: str) -> pd.DataFrame:
     try:
         # 구글 인증 처리
@@ -547,6 +574,14 @@ class OrderApp(QMainWindow):
                 if fname.lower().endswith((".xls", ".xlsx")):
                     excel_files.append(os.path.join(self._temp_dir, fname))
 
+            self.list_path = next(
+                (p for p in excel_files if "발주서리스트" in os.path.basename(p)),
+                None
+            )
+            self.price_map = (
+                load_purchase_price_map(self.list_path) if self.list_path else {}
+            )  
+            
             self.orders_data.clear()
             confirmed_skipped = 0
 
@@ -856,11 +891,7 @@ class OrderApp(QMainWindow):
             df_confirm = df_confirm[df_confirm["확정수량"] > 0]
 
             # ── 0-A.  매입가 매핑 (바코드 → 매입가) ──
-            price_map = (
-                df_confirm
-                .set_index(df_confirm["상품바코드"].astype(str).str.strip())["매입가"]
-                .to_dict()
-            )
+            price_map = getattr(self, "price_map", {})
 
             # ─────────────────────────────────────────────
             # 1) 그룹핑
