@@ -32,6 +32,15 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
+#SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" 
+SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" 
+
+STOCK_SHEET_CSV = (
+    f"https://docs.google.com/spreadsheets/d/{SHEET_ID_MASTER}/export"
+    "?format=csv&gid=679677814" 
+)
+
+
 #Google Credential Files
 def load_credentials():
     if getattr(sys, 'frozen', False):
@@ -90,11 +99,6 @@ PRODUCT_HEADERS = [
     "포장1개당구매수량", "합포장여부", "메모"
 ]
 
-STOCK_SHEET_CSV = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4/export"
-    "?format=csv&gid=794212207"
-)
 
 ICON_PATH = os.path.join(os.path.dirname(__file__), "images", "cashbot.ico")
 
@@ -146,7 +150,7 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
         client = get_gspread_client()
 
         # 시트 접근
-        sheet = client.open_by_key("1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4")
+        sheet = client.open_by_key(SHEET_ID_MASTER)
 
         # ─────────────────────────────
         # ✅ 재고 리스트 처리
@@ -936,7 +940,7 @@ class OrderApp(QMainWindow):
             # 3) Google Sheets 업로드
             # ─────────────────────────────────────────────
             append_to_google_sheet(
-                sheet_id="1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4",
+                sheet_id=SHEET_ID_MASTER,
                 sheet_name="CALL 요청서",
                 rows=rows_3pl_sheet            # ← 매입가 포함 버전
             )
@@ -944,13 +948,13 @@ class OrderApp(QMainWindow):
             if len(rows_order) == 1:           # 주문할 항목 없음
                 ws_ord.cell(row=2, column=1).value = "재고가 충분하여 주문할 항목이 없습니다."
                 append_to_google_sheet(
-                    sheet_id="1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4",
+                    sheet_id=SHEET_ID_MASTER,
                     sheet_name="CALL 주문서",
                     rows=[["재고가 충분하여 주문할 항목이 없습니다."]]
                 )
             else:
                 append_to_google_sheet(
-                    sheet_id="1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4",
+                    sheet_id=SHEET_ID_MASTER,
                     sheet_name="CALL 주문서",
                     rows=rows_order
                 )
