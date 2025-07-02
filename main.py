@@ -819,103 +819,130 @@ class OrderApp(QMainWindow):
     # ──────────────────────────────────────────────────────────
     def generate_orders(self):
 
+        # ── 1. 스프레드시트에 업로드할 때 모든 행 끝에 실행일시 붙이기 ──
         def append_to_google_sheet(sheet_id: str, sheet_name: str, rows: list[list[str]]):
-            client = get_gspread_client()  
-            sheet = client.open_by_key(sheet_id)
-            worksheet = sheet.worksheet(sheet_name)
+            client = get_gspread_client()
+            ws     = client.open_by_key(sheet_id).worksheet(sheet_name)
 
-            content_rows = rows[1:]  # 헤더 제외
+            content_rows = rows[1:]                                # 헤더 제외
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for i, row in enumerate(content_rows):
-                row.append(now_str if i == 0 else "")  # 첫 줄에만 시간
+            for row in content_rows:                               # ➡ 모든 행에 타임스탬프
+                row.append(now_str)
 
-            worksheet.append_rows(content_rows, value_input_option="USER_ENTERED")
+            ws.append_rows(content_rows, value_input_option="USER_ENTERED")
 
         try:
-            inv_df = load_stock_df(self.business_number)
-            inventory_dict = {
-                str(r["바코드"]).strip(): int(float(r["수량"] or 0))
-                for _, r in inv_df.iterrows()
-            }
-            used_stock = {}
-
-            prod_df = pd.read_excel("상품정보.xlsx", dtype=str).fillna("")
+            # ─────────────────────────────────────────────
+            # 0) 재고·확정 양식 로드
+            # ─────────────────────────────────────────────
+            inv_df      = load_stock_df(self.business_number)
+            inventory   = {str(r["바코드"]).strip(): int(float(r["수량"] or 0))
+                        for _, r in inv_df.iterrows()}
+            used_stock  = {}
 
             confirm_path = "발주 확정 양식.xlsx"
-            df_confirm = pd.read_excel(confirm_path, dtype=str).fillna("")
-            df_confirm["확정수량"] = pd.to_numeric(df_confirm["확정수량"], errors="coerce").fillna(0).astype(int)
+            df_confirm   = pd.read_excel(confirm_path, dtype=str).fillna("")
+
+            df_confirm["확정수량"] = pd.to_numeric(
+                df_confirm["확정수량"], errors="coerce"
+            ).fillna(0).astype(int)
             df_confirm["Shipment"] = df_confirm["발주번호"].map(
                 lambda x: self.orders_data.get(str(x).strip(), {}).get("shipment", "")
             )
             df_confirm = df_confirm[df_confirm["확정수량"] > 0]
 
+            # ── 0-A.  매입가 매핑 (바코드 → 매입가) ──
+            price_map = (
+                df_confirm
+                .set_index(df_confirm["상품바코드"].astype(str).str.strip())["매입가"]
+                .to_dict()
+            )
+
+            # ─────────────────────────────────────────────
+            # 1) 그룹핑
+            # ─────────────────────────────────────────────
             group_cols = ["Shipment", "상품바코드", "상품이름", "물류센터", "입고예정일"]
-            df_group = df_confirm[group_cols + ["확정수량"]].groupby(group_cols, as_index=False)["확정수량"].sum()
+            df_group   = (df_confirm[group_cols + ["확정수량"]]
+                        .groupby(group_cols, as_index=False)["확정수량"].sum())
 
-            brand = self.le_brand.text().strip()
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            headers_3pl = ["브랜드명", "쉽먼트번호", "발주번호", "SKU번호",
-                        "SKU(제품명)", "바코드", "수량", "입고예정일", "센터명", "사업자번호" ]
-            rows_3pl = [headers_3pl]
-
-            headers_order = ["바코드명", "바코드", "상품코드", "쿠팡납품센터명",
-                            "쿠팡쉽먼트번호", "쿠팡입고예정일자", "입고마감준수여부", "발주수량", "중국재고사용여부"]
-            rows_order = [headers_order]
-
-            wb_3pl = Workbook()
-            ws_3pl = wb_3pl.active
-            ws_3pl.title = "3PL신청서"
-            ws_3pl.append(headers_3pl)
-
-            wb_order = Workbook()
-            ws_order = wb_order.active
-            ws_order.title = "주문서"
-            ws_order.append(headers_order)
-
+            brand   = self.le_brand.text().strip()
+            ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
             biz_num = self.business_number.strip()
 
+            # ── 1-A.  헤더 두 벌 (엑셀용 / 시트용) ──
+            hed_3pl  = ["브랜드명","쉽먼트번호","발주번호","SKU번호",
+                        "SKU(제품명)","바코드","수량",
+                        "입고예정일","센터명","사업자번호"]
+            rows_3pl_file  = [hed_3pl]                 # 엑셀 저장용
+            rows_3pl_sheet = [hed_3pl + ["매입가"]]    # 시트 업로드용  (+ 매입가)
+
+            hed_ord = ["바코드명","바코드","상품코드","쿠팡납품센터명",
+                    "쿠팡쉽먼트번호","쿠팡입고예정일자","입고마감준수여부",
+                    "발주수량","중국재고사용여부"]
+            rows_order = [hed_ord]
+
+            # ── 1-B.  엑셀 워크북 준비 ──
+            wb_3pl, ws_3pl = Workbook(), None
+            ws_3pl = wb_3pl.active; ws_3pl.title = "3PL신청서"; ws_3pl.append(hed_3pl)
+
+            wb_ord, ws_ord = Workbook(), None
+            ws_ord = wb_ord.active; ws_ord.title = "주문서";      ws_ord.append(hed_ord)
+
+            # ─────────────────────────────────────────────
+            # 2) 행 생성
+            # ─────────────────────────────────────────────
             for _, r in df_group.iterrows():
-                bc = safe_strip(r.get("상품바코드"))
-                pname = r["상품이름"]
-                center = r["물류센터"]
+                bc      = safe_strip(r["상품바코드"])
+                pname   = r["상품이름"]
+                center  = r["물류센터"]
                 ship_no = r["Shipment"]
                 eta_raw = r["입고예정일"]
-                qty = int(r["확정수량"])
-                eta_str = pd.to_datetime(eta_raw, errors="coerce").strftime("%Y-%m-%d") if eta_raw else ""
+                qty     = int(r["확정수량"])
+                eta_str = (pd.to_datetime(eta_raw, errors="coerce")
+                        .strftime("%Y-%m-%d") if eta_raw else "")
 
                 mask = (df_confirm["Shipment"] == ship_no) & (df_confirm["상품바코드"] == bc)
                 po_no = product_code = ""
                 if mask.any():
-                    po_no = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
+                    po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
                     product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
 
-                row_3pl = [brand, ship_no, po_no, product_code, pname, bc, qty, eta_str, center, biz_num]
-                
-                rows_3pl.append(row_3pl)
-                ws_3pl.append(row_3pl)
+                # 기본 행 (엑셀·시트 공통 파트)
+                row_base = [brand, ship_no, po_no, product_code,
+                            pname, bc, qty, eta_str, center, biz_num]
 
+                # 2-A.  엑셀용
+                rows_3pl_file.append(row_base)
+                ws_3pl.append(row_base)
+
+                # 2-B.  시트용 = 기본 + 매입가
+                purchase = price_map.get(bc, "")
+                rows_3pl_sheet.append(row_base + [purchase])
+
+                # 주문서(재고 부족분)
                 already = used_stock.get(bc, 0)
-                avail = inventory_dict.get(bc, 0) - already
-                need = max(qty - max(avail, 0), 0)
+                avail   = inventory.get(bc, 0) - already
+                need    = max(qty - max(avail, 0), 0)
 
                 if need > 0:
-                    row_order = [pname, bc, product_code, center, ship_no, eta_str, "Y", need, "N"]
-                    rows_order.append(row_order)
-                    ws_order.append(row_order)
+                    row_ord = [pname, bc, product_code, center,
+                            ship_no, eta_str, "Y", need, "N"]
+                    rows_order.append(row_ord)
+                    ws_ord.append(row_ord)
 
                 used_stock[bc] = already + min(qty, max(avail, 0))
 
-            # ✅ 스프레드시트 전송
+            # ─────────────────────────────────────────────
+            # 3) Google Sheets 업로드
+            # ─────────────────────────────────────────────
             append_to_google_sheet(
                 sheet_id="1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4",
                 sheet_name="CALL 요청서",
-                rows=rows_3pl
+                rows=rows_3pl_sheet            # ← 매입가 포함 버전
             )
 
-            if len(rows_order) == 1:
-                # ✅ 주문할 항목 없음
-                ws_order.cell(row=2, column=1).value = "재고가 충분하여 주문할 항목이 없습니다."
+            if len(rows_order) == 1:           # 주문할 항목 없음
+                ws_ord.cell(row=2, column=1).value = "재고가 충분하여 주문할 항목이 없습니다."
                 append_to_google_sheet(
                     sheet_id="1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4",
                     sheet_name="CALL 주문서",
@@ -928,9 +955,11 @@ class OrderApp(QMainWindow):
                     rows=rows_order
                 )
 
-            # ✅ 파일 저장
+            # ─────────────────────────────────────────────
+            # 4) 로컬 파일 저장
+            # ─────────────────────────────────────────────
             wb_3pl.save(f"3PL신청내역_{ts}.xlsx")
-            wb_order.save(f"주문서_{ts}.xlsx")
+            wb_ord.save(f"주문서_{ts}.xlsx")
 
             QMessageBox.information(
                 self, "완료",
