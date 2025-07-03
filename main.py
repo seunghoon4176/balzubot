@@ -32,6 +32,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from pathlib import Path
+from random import randint
 
 #SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" 
 SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" 
@@ -146,31 +147,47 @@ def safe_strip(value):
     return str(value).strip()
 
 def load_purchase_price_map(list_path: str) -> dict[str, str]:
-    """발주서리스트_*.xlsx → {바코드: 매입가(공급가 블록)}"""
-    # 1) 원본 읽기 ─ 헤더 없음으로 읽고 18행을 진짜 헤더로 지정
-    df_raw = pd.read_excel(list_path, dtype=str, header=None).fillna("")
-    header_row = 18
-    df_raw.columns = df_raw.iloc[header_row]
-    df = df_raw.iloc[header_row + 1:].reset_index(drop=True)
+    """
+    발주서리스트_*.xlsx → {바코드: 매입가}
+    병합 헤더 완벽 대응 최종 버전
+    """
+    # 병합 헤더를 다중 헤더로 읽기 (엑셀 기준 20, 21번째 줄 → header=[19, 20])
+    df_raw = pd.read_excel(list_path, dtype=str, header=[19, 20]).fillna("")
 
-    # 2) 열 찾기 ---------------------------------------------------------
-    col_bar = next(c for c in df.columns
-                   if "BARCODE" in str(c).upper() or "바코드" in str(c))
+    # 열 이름이 MultiIndex로 들어옴 → 공백 제거 후 하나의 문자열로 합치기
+    df_raw.columns = [' '.join(str(s).strip() for s in col if str(s).strip()) for col in df_raw.columns]
 
-    # (1) 모든 매입가 열을 모으고
-    cost_cols = [c for c in df.columns if str(c).startswith("매입가")]
-    # (2) 가장 왼쪽(=index 0) 열을 사용
-    col_cost = cost_cols[0]   # '매입가'  ← suffix 없는 첫 열
+    # 바코드 열 찾기
+    col_bar_candidates = [c for c in df_raw.columns if "barcode" in c.replace(" ", "").lower() or "바코드" in c]
+    if not col_bar_candidates:
+        raise Exception(f"발주서리스트 파일에서 바코드 열을 찾을 수 없습니다.\n현재 열: {df_raw.columns.tolist()}")
+    col_bar = col_bar_candidates[0]
+
+    # 매입가 열 찾기 (왼쪽 매입가 우선)
+    cost_cols = [c for c in df_raw.columns if "매입가" in c.replace(" ", "")]
+    if not cost_cols:
+        raise Exception(f"발주서리스트 파일에서 '매입가' 열을 찾을 수 없습니다.\n현재 열: {df_raw.columns.tolist()}")
+    col_cost = cost_cols[0]
 
     price_map = {}
-    # 3) 바로 아래줄이 바코드인 구조 활용
-    for idx in range(1, len(df)):
-        bar = str(df.at[idx, col_bar]).strip()
-        if bar.startswith("R"):
-            purchase = str(df.at[idx - 1, col_cost]).strip()
-            price_map[bar] = purchase
+
+    rows = df_raw[col_bar].tolist()
+    costs = df_raw[col_cost].tolist()
+
+    i = 0
+    while i < len(rows) - 1:
+        name = str(rows[i]).strip()
+        barcode = str(rows[i + 1]).strip()
+        purchase = str(costs[i]).strip()
+
+        if barcode.startswith("R"):
+            price_map[barcode] = purchase
+            i += 2
+        else:
+            i += 1
 
     return price_map
+
 
 def load_stock_df(biz_num: str) -> pd.DataFrame:
     try:
@@ -220,22 +237,17 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
         df_result = df_filtered[[sku_col, name_col, bc_col, qty_col]]
         df_result.columns = ["SKU", "상품명", "바코드", "수량"]
 
-        # 저장
-        if save_dir is None:
-            save_dir = Path.home() / "Downloads" / "balzubot"
-            save_dir.mkdir(parents=True, exist_ok=True)
+        # ─────────────────────────────
+        # ✅ 저장 경로 설정 (파일명 충돌 방지)
+        save_dir = Path.home() / "Downloads" / "balzubot"
+        save_dir.mkdir(parents=True, exist_ok=True)
 
-            ts   = datetime.now().strftime("%Y%m%d_%H%M%S")   # 시·분·초까지
-            path = save_dir / f"재고_{biz_num}_{ts}.xlsx"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rand_suffix = randint(1000, 9999)
 
-            try:
-                df_result.to_excel(path, index=False)
-                print(f"[INFO] 재고 저장 완료: {path}")
-            except PermissionError:
-                # 이미 열려 있거나 권한이 없을 때 ⇒ 다른 이름으로 한 번 더 시도
-                alt = path.with_stem(path.stem + "_alt")
-                df_result.to_excel(alt, index=False)
-                print(f"[WARN] {path} 에 쓰기 실패 → {alt} 로 저장")
+        path = save_dir / f"재고_{biz_num}_{ts}_{rand_suffix}.xlsx"
+        df_result.to_excel(path, index=False)
+        print(f"[INFO] 재고 저장 완료: {path}")
 
         # ─────────────────────────────
         # ✅ 입출고 리스트 처리
@@ -245,13 +257,18 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
             df_inout = pd.DataFrame(data_inout[1:], columns=data_inout[0]).fillna("")
 
             biz_col_io = next((c for c in df_inout.columns if "사업자 번호" in c), None)
+
+            if biz_col_io is None:
+                print("[INFO] 입출고리스트에서 사업자 번호 열이 없습니다.")
+                return df_result
             if biz_col_io:
                 df_filtered_io = df_inout[df_inout[biz_col_io].astype(str).str.strip() == biz_num]
 
                 if not df_filtered_io.empty:
-                    io_filename = f"입출고리스트_{biz_num}_{ts}.xlsx"
+                    io_filename = save_dir / f"입출고리스트_{biz_num}_{ts}_{rand_suffix}.xlsx"
                     df_filtered_io.to_excel(io_filename, index=False)
                     print(f"[INFO] 입출고리스트 저장 완료: {io_filename}")
+
         except Exception as e_io:
             print(f"[WARN] 입출고리스트 시트 처리 중 오류: {e_io}")
 
@@ -389,6 +406,8 @@ class OrderApp(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        self.skip_inventory_check = False
+        
         self.business_number = ""
 
         self.setWindowTitle("수강생 발주 프로그램")
@@ -579,6 +598,7 @@ class OrderApp(QMainWindow):
     # 1) 발주서 파싱 + 바코드 검증 + Selenium --------------------------------
     def _first_phase(self):
         try:
+            print("[first_phase] 시작")
 
             # 1-A. 폴더 내 엑셀 파일 로드
             excel_files = []
@@ -586,68 +606,88 @@ class OrderApp(QMainWindow):
                 if fname.lower().endswith((".xls", ".xlsx")):
                     excel_files.append(os.path.join(self._temp_dir, fname))
 
+            if not excel_files:
+                raise Exception("엑셀 파일이 없습니다.")
+
             self.list_path = next(
                 (p for p in excel_files if "발주서리스트" in os.path.basename(p)),
                 None
             )
             self.price_map = (
                 load_purchase_price_map(self.list_path) if self.list_path else {}
-            )  
-            
+            )
+
             self.orders_data.clear()
-            confirmed_skipped = 0
 
             for idx, xlsx in enumerate(excel_files):
-                df_raw = pd.read_excel(xlsx, header=None, dtype=str)
-                po_row = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("발주번호", na=False)].index[0]
-                po_no  = str(df_raw.iloc[po_row, 2]).strip()
+                print(f"[first_phase] 처리 중: {os.path.basename(xlsx)}")
 
-                eta_row = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("입고예정일시", na=False)].index[0] + 1
-                eta_raw = df_raw.iloc[eta_row, 5]
-                eta     = pd.to_datetime(eta_raw, errors="coerce")
-                if pd.isna(eta):
-                    raise ValueError(f"입고예정일시 변환 오류: {eta_raw}")
-                eta = eta.to_pydatetime()
+                try:
+                    df_raw = pd.read_excel(xlsx, header=None, dtype=str)
 
-                center = str(df_raw.iloc[eta_row, 2]).strip()
+                    # 발주번호 찾기
+                    po_row_series = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("발주번호", na=False)].index
+                    if po_row_series.empty:
+                        raise ValueError(f"{os.path.basename(xlsx)} 파일에 '발주번호'가 없습니다.")
+                    po_row = po_row_series[0]
+                    po_no = str(df_raw.iloc[po_row, 2]).strip()
 
-                df_items = pd.read_excel(xlsx, header=19, dtype=str).fillna("")
-                df_items = df_items.loc[:, ~df_items.columns.str.startswith("Unnamed")]
-                df_items.columns = df_items.columns.str.strip()
+                    # 입고예정일시 찾기
+                    eta_row_series = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("입고예정일시", na=False)].index
+                    if eta_row_series.empty:
+                        raise ValueError(f"{os.path.basename(xlsx)} 파일에 '입고예정일시'가 없습니다.")
+                    eta_row = eta_row_series[0] + 1
 
-                col_barcode = next((c for c in df_items.columns if "BARCODE" in c.upper() or "바코드" in c), None)
-                if not col_barcode:
-                    continue
+                    eta_raw = df_raw.iloc[eta_row, 5]
+                    eta = pd.to_datetime(eta_raw, errors="coerce")
+                    if pd.isna(eta):
+                        raise ValueError(f"입고예정일시 변환 실패: {eta_raw}")
+                    eta = eta.to_pydatetime()
 
-                rows = df_items[col_barcode].tolist()
-                valid_pairs = []
-                i = 0
-                while i < len(rows) - 1:
-                    name = str(rows[i]).strip()
-                    barcode = str(rows[i + 1]).strip()
-                    if barcode.startswith("R"):
-                        valid_pairs.append((name, barcode))
-                        i += 2
-                    else:
-                        i += 1
+                    center = str(df_raw.iloc[eta_row, 2]).strip()
 
-                for product_name, barcode in valid_pairs:
-                    if not barcode:
-                        continue
+                    df_items = pd.read_excel(xlsx, header=19, dtype=str).fillna("")
+                    df_items = df_items.loc[:, ~df_items.columns.str.startswith("Unnamed")]
+                    df_items.columns = df_items.columns.str.strip()
 
-                    if po_no not in self.orders_data:
-                        self.orders_data[po_no] = {
-                            "barcode":      barcode,
-                            "product_code": "",
-                            "product_name": product_name,
-                            "center":       center,
-                            "eta":          eta,
-                            "shipment":     None,
-                            "invoice":      str(random.randint(10**9, 10**10-1))
-                        }
+                    col_barcode = next((c for c in df_items.columns if "BARCODE" in c.upper() or "바코드" in c), None)
+                    if not col_barcode:
+                        continue  # 바코드 열 없으면 그냥 넘어가
 
-                pct = int((idx + 1) / len(excel_files) * 30)
-                self.progressUpdated.emit(pct)
+                    rows = df_items[col_barcode].tolist()
+                    valid_pairs = []
+                    i = 0
+                    while i < len(rows) - 1:
+                        name = str(rows[i]).strip()
+                        barcode = str(rows[i + 1]).strip()
+                        if barcode.startswith("R"):
+                            valid_pairs.append((name, barcode))
+                            i += 2
+                        else:
+                            i += 1
+
+                    for product_name, barcode in valid_pairs:
+                        if not barcode:
+                            continue
+
+                        if po_no not in self.orders_data:
+                            self.orders_data[po_no] = {
+                                "barcode": barcode,
+                                "product_code": "",
+                                "product_name": product_name,
+                                "center": center,
+                                "eta": eta,
+                                "shipment": None,
+                                "invoice": str(random.randint(10**9, 10**10 - 1))
+                            }
+
+                    pct = int((idx + 1) / len(excel_files) * 30)
+                    self.progressUpdated.emit(pct)
+
+                except Exception as e:
+                    raise Exception(f"{os.path.basename(xlsx)} 파일 처리 중 오류: {e}")
+
+            print("[first_phase] 상품정보 바코드 확인 시작")
 
             # 🔍 상품정보 바코드 누락 자동 추가 (orders_data 안 씀)
             prod_df = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
@@ -685,7 +725,7 @@ class OrderApp(QMainWindow):
                     if bc_lower not in known_barcodes:
                         new_barcodes.append((barcode, product_name))
 
-            # ✅ 중복 제거
+            # ✅ 신규 바코드 추가 시 → 재실행 플래그 ON
             added = set()
             rows_to_append = []
             for barcode, name in new_barcodes:
@@ -702,31 +742,35 @@ class OrderApp(QMainWindow):
                     ws.append(row)
                 wb.save(PRODUCT_XLSX)
 
+                self.skip_inventory_check = True  # ✅ 다음 실행 시 재고 스킵
+
                 QMessageBox.information(
                     self, "상품정보 자동 추가",
                     f"{len(rows_to_append)}개 바코드를 상품정보.xlsx에 자동으로 추가했습니다.\n내용 확인 후 다시 실행해주세요."
                 )
                 return
 
-            # 1-C. 재고 확인
-            try:
-                inv_df = load_stock_df(self.business_number)
-                if inv_df.empty:
-                    QMessageBox.warning(self, "재고 시트 비어 있음", "현재 재고 시트에 데이터가 없습니다.\n계속 진행은 가능하지만 재고 확인은 생략됩니다.")
-            except Exception as e:
-                QMessageBox.warning(self, "재고 확인 경고", f"재고 정보를 불러오는 중 오류 발생: {e}\n재고 확인을 생략하고 계속 진행합니다.")
+            print("[first_phase] 재고 확인 시작")
 
-            # Selenium 로그인
-            self.progress.setVisible(True)
-            self.progressUpdated.emit(30)
+            if not self.skip_inventory_check:  # ✅ 재고 스킵 플래그 체크
+                try:
+                    inv_df = load_stock_df(self.business_number)
+                    if inv_df.empty:
+                        QMessageBox.warning(self, "재고 시트 비어 있음", "현재 재고 시트에 데이터가 없습니다.\n계속 진행은 가능하지만 재고 확인은 생략됩니다.")
+                except Exception as e:
+                    QMessageBox.warning(self, "재고 확인 경고", f"재고 정보를 불러오는 중 오류 발생: {e}\n재고 확인을 생략하고 계속 진행합니다.")
+            else:
+                print("[first_phase] 재고 확인 스킵됨")
+
+            print("[first_phase] Selenium 드라이버 시작")
 
             options = ChromeOptions()
             options.add_argument("--start-maximized")
             try:
                 self.driver = webdriver.Chrome(options=options)
+                print("[first_phase] 드라이버 실행 완료")
             except Exception as e:
-                QMessageBox.critical(self, "WebDriver 오류", f"ChromeDriver 실행 실패:\n{e}")
-                return
+                raise Exception(f"ChromeDriver 실행 실패: {e}")
 
             self.driver.implicitly_wait(5)
             oauth_url = (
@@ -734,7 +778,11 @@ class OrderApp(QMainWindow):
                 "protocol/openid-connect/auth?response_type=code&client_id=supplier-hub"
                 "&scope=openid&state=abc&redirect_uri=https://supplier.coupang.com/login/oauth2/code/keycloak"
             )
-            self.driver.get(oauth_url)
+            try:
+                self.driver.get(oauth_url)
+                print("[first_phase] 로그인 페이지 로드 완료")
+            except Exception as e:
+                raise Exception(f"로그인 페이지 접속 실패: {e}")
 
             if self.coupang_id and self.coupang_pw:
                 try:
@@ -743,17 +791,19 @@ class OrderApp(QMainWindow):
                     ).send_keys(self.coupang_id)
                     self.driver.find_element(By.CSS_SELECTOR, "input[name='password']").send_keys(self.coupang_pw)
                     self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-                except Exception:
-                    pass
+                except Exception as e:
+                    raise Exception(f"쿠팡 로그인 실패: {e}")
 
             self.btn_batch.setText("로그인 완료")
             self.btn_batch.clicked.disconnect()
             self.btn_batch.clicked.connect(self.second_phase)
             self.btn_batch.setEnabled(True)
 
+            print("[first_phase] 완료")
+
         except Exception as e:
-            print("[예외 - first_phase]", e)
-            self.crawlError.emit(str(e))
+            print("[예외 - first_phase]", repr(e))
+            self.crawlError.emit(f"[first_phase 오류] {repr(e)}")
 
     # ──────────────────────────────────────────────────────────
     # 2) Selenium 로그인 완료 후 크롤링
@@ -1036,8 +1086,13 @@ class OrderApp(QMainWindow):
         self._reset_btn()
 
     def _crawl_err(self, msg: str):
-        self.progress.setVisible(False); QMessageBox.critical(self, "크롤 오류", msg)
-        if self.driver: self.driver.quit(); self.driver = None
+        self.progress.setVisible(False)
+        if not msg.strip():  # 빈 문자열이면
+            msg = "에러 발생 (상세 메시지 없음)"
+        QMessageBox.critical(self, "크롤 오류", msg)
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
         self._reset_btn()
 
     def _reset_btn(self):
