@@ -31,6 +31,7 @@ from google.oauth2.service_account import Credentials
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from pathlib import Path
 
 #SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" 
 SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" 
@@ -220,10 +221,21 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
         df_result.columns = ["SKU", "상품명", "바코드", "수량"]
 
         # 저장
-        ts = datetime.now().strftime("%Y%m%d")
-        filename = f"재고_{biz_num}_{ts}.xlsx"
-        df_result.to_excel(filename, index=False)
-        print(f"[INFO] 재고 저장 완료: {filename}")
+        if save_dir is None:
+            save_dir = Path.home() / "Downloads" / "balzubot"
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            ts   = datetime.now().strftime("%Y%m%d_%H%M%S")   # 시·분·초까지
+            path = save_dir / f"재고_{biz_num}_{ts}.xlsx"
+
+            try:
+                df_result.to_excel(path, index=False)
+                print(f"[INFO] 재고 저장 완료: {path}")
+            except PermissionError:
+                # 이미 열려 있거나 권한이 없을 때 ⇒ 다른 이름으로 한 번 더 시도
+                alt = path.with_stem(path.stem + "_alt")
+                df_result.to_excel(alt, index=False)
+                print(f"[WARN] {path} 에 쓰기 실패 → {alt} 로 저장")
 
         # ─────────────────────────────
         # ✅ 입출고 리스트 처리
