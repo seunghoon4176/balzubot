@@ -33,6 +33,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from pathlib import Path
 from random import randint
+import traceback
 
 #SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" 
 SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" 
@@ -189,16 +190,11 @@ def load_purchase_price_map(list_path: str) -> dict[str, str]:
     return price_map
 
 
-def load_stock_df(biz_num: str) -> pd.DataFrame:
+def load_stock_df(biz_num: str, save_excel: bool = True) -> pd.DataFrame:
     try:
-        # 구글 인증 처리
         client = get_gspread_client()
-
-        # 시트 접근
         sheet = client.open_by_key(SHEET_ID_MASTER)
 
-        # ─────────────────────────────
-        # ✅ 재고 리스트 처리
         ws_stock = sheet.worksheet("재고 리스트")
         data_stock = ws_stock.get_all_values()
         header = data_stock[0]
@@ -208,7 +204,6 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
 
         df_stock = pd.DataFrame(records, columns=header).fillna("")
 
-        # 열 이름 유연하게 찾기
         def find_column(possible_names: list[str]) -> str | None:
             for key in possible_names:
                 for col in df_stock.columns:
@@ -216,66 +211,57 @@ def load_stock_df(biz_num: str) -> pd.DataFrame:
                         return col
             return None
 
-        sku_col  = find_column(["SKU", "상품코드"])
+        sku_col = find_column(["SKU", "상품코드"])
         name_col = find_column(["제품명", "상품명"])
-        bc_col   = find_column(["바코드", "barcode"])
-        qty_col  = find_column(["수량", "재고", "재고수량"])
-        biz_col  = find_column(["사업자 번호", "사업자", "사업자등록번호"])
+        bc_col = find_column(["바코드", "barcode"])
+        qty_col = find_column(["수량", "재고", "재고수량"])
+        biz_col = find_column(["사업자 번호", "사업자", "사업자등록번호"])
 
-        # 필수 열 확인
         if not all([sku_col, name_col, bc_col, qty_col, biz_col]):
-            print("[재고 시트 오류] 필수 열 누락 - SKU, 제품명, 바코드, 수량, 사업자번호 중 하나가 없습니다.")
+            print("[재고 시트 오류] 필수 열 누락")
             return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
 
-        # 사업자 필터링
         df_filtered = df_stock[df_stock[biz_col].astype(str).str.strip() == biz_num]
 
         if df_filtered.empty:
-            print(f"[INFO] 재고 시트에 해당 사업자번호 {biz_num} 에 대한 데이터 없음")
+            print(f"[INFO] 재고 시트에 해당 사업자번호 {biz_num} 데이터 없음")
             return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
 
         df_result = df_filtered[[sku_col, name_col, bc_col, qty_col]]
         df_result.columns = ["SKU", "상품명", "바코드", "수량"]
 
-        # ─────────────────────────────
-        # ✅ 저장 경로 설정 (파일명 충돌 방지)
-        save_dir = Path.home() / "Downloads" / "balzubot"
-        save_dir.mkdir(parents=True, exist_ok=True)
+        # 🔥 이 부분 완전히 차단 (혹시라도 다른 데서 엉켜있을 수 있으니)
+        if save_excel:
+            try:
+                save_dir = Path.home() / "Downloads" / "balzubot"
+                save_dir.mkdir(parents=True, exist_ok=True)
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        rand_suffix = randint(1000, 9999)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                rand_suffix = randint(1000, 9999)
+                path = save_dir / f"재고_{biz_num}_{ts}_{rand_suffix}.xlsx"
 
-        path = save_dir / f"재고_{biz_num}_{ts}_{rand_suffix}.xlsx"
-        df_result.to_excel(path, index=False)
-        print(f"[INFO] 재고 저장 완료: {path}")
+                # 🔥 파일이 이미 열려있는지 확인
+                if path.exists():
+                    print(f"[WARN] 파일이 이미 존재: {path}")
+                    # 파일이 열려있으면 삭제하고 새로 만들기
+                    try:
+                        os.remove(path)
+                        print(f"[INFO] 기존 파일 삭제: {path}")
+                    except Exception as e:
+                        print(f"[ERROR] 파일 삭제 실패: {e}")
+                        raise Exception(f"파일 삭제 실패: {e}")
 
-        # ─────────────────────────────
-        # ✅ 입출고 리스트 처리
-        try:
-            ws_inout = sheet.worksheet("입출고 리스트")
-            data_inout = ws_inout.get_all_values()
-            df_inout = pd.DataFrame(data_inout[1:], columns=data_inout[0]).fillna("")
-
-            biz_col_io = next((c for c in df_inout.columns if "사업자 번호" in c), None)
-
-            if biz_col_io is None:
-                print("[INFO] 입출고리스트에서 사업자 번호 열이 없습니다.")
-                return df_result
-            if biz_col_io:
-                df_filtered_io = df_inout[df_inout[biz_col_io].astype(str).str.strip() == biz_num]
-
-                if not df_filtered_io.empty:
-                    io_filename = save_dir / f"입출고리스트_{biz_num}_{ts}_{rand_suffix}.xlsx"
-                    df_filtered_io.to_excel(io_filename, index=False)
-                    print(f"[INFO] 입출고리스트 저장 완료: {io_filename}")
-
-        except Exception as e_io:
-            print(f"[WARN] 입출고리스트 시트 처리 중 오류: {e_io}")
+                df_result.to_excel(path, index=False)
+                print(f"[INFO] 재고 저장 완료: {path}")
+            except Exception as e:
+                print(f"[ERROR] 파일 저장 중 오류: {e}")
+                raise e
 
         return df_result
 
     except Exception as e:
         print("[load_stock_df 예외 발생]", type(e), e)
+        traceback.print_exc()  # 🔥 여기가 핵심
         return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
 
 
@@ -424,6 +410,9 @@ class OrderApp(QMainWindow):
         self.cached_shipment = {}
         self.driver = None
 
+        self.processed_files = set()  # ✅ 이미 처리한 파일 캐시
+        self.cached_stock_df = None   # ✅ 재고 데이터 캐시
+
         self._build_ui(); self._load_config()
         self.progressUpdated.connect(lambda v: self.progress.setValue(v))
         self.crawlFinished.connect(self._crawl_ok)
@@ -477,7 +466,7 @@ class OrderApp(QMainWindow):
             QMessageBox.warning(self, "사업자번호 없음", "먼저 설정에서 사업자번호를 입력하세요.")
             return
         try:
-            result_df = load_stock_df(self.business_number)
+            result_df = load_stock_df(self.business_number, save_excel=False) 
             if result_df.empty:
                 QMessageBox.information(self, "완료", "해당 사업자의 재고 데이터가 없습니다.")
             else:
@@ -564,6 +553,7 @@ class OrderApp(QMainWindow):
     # 0) ZIP 전처리 ------------------------------------------------------
     def _zero_phase(self):
         try:
+            self.processed_files.clear()  # ✅ 새 발주 시작 시 캐시 초기화
             excel_files = []
             confirmed_skipped = 0
 
@@ -600,7 +590,6 @@ class OrderApp(QMainWindow):
         try:
             print("[first_phase] 시작")
 
-            # 1-A. 폴더 내 엑셀 파일 로드
             excel_files = []
             for fname in os.listdir(self._temp_dir):
                 if fname.lower().endswith((".xls", ".xlsx")):
@@ -613,26 +602,30 @@ class OrderApp(QMainWindow):
                 (p for p in excel_files if "발주서리스트" in os.path.basename(p)),
                 None
             )
-            self.price_map = (
-                load_purchase_price_map(self.list_path) if self.list_path else {}
-            )
+            self.price_map = {}
 
-            self.orders_data.clear()
+            for p in excel_files:
+                if "발주서리스트" in os.path.basename(p):
+                    partial_map = load_purchase_price_map(p)
+                    self.price_map.update(partial_map)
 
             for idx, xlsx in enumerate(excel_files):
                 print(f"[first_phase] 처리 중: {os.path.basename(xlsx)}")
 
+                # ✅ 캐시된 파일은 건너뜀
+                if xlsx in self.processed_files:
+                    print(f"[first_phase] 이미 처리된 파일, 건너뜀: {os.path.basename(xlsx)}")
+                    continue
+
                 try:
                     df_raw = pd.read_excel(xlsx, header=None, dtype=str)
 
-                    # 발주번호 찾기
                     po_row_series = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("발주번호", na=False)].index
                     if po_row_series.empty:
                         raise ValueError(f"{os.path.basename(xlsx)} 파일에 '발주번호'가 없습니다.")
                     po_row = po_row_series[0]
                     po_no = str(df_raw.iloc[po_row, 2]).strip()
 
-                    # 입고예정일시 찾기
                     eta_row_series = df_raw[df_raw.iloc[:, 0].astype(str).str.contains("입고예정일시", na=False)].index
                     if eta_row_series.empty:
                         raise ValueError(f"{os.path.basename(xlsx)} 파일에 '입고예정일시'가 없습니다.")
@@ -652,7 +645,7 @@ class OrderApp(QMainWindow):
 
                     col_barcode = next((c for c in df_items.columns if "BARCODE" in c.upper() or "바코드" in c), None)
                     if not col_barcode:
-                        continue  # 바코드 열 없으면 그냥 넘어가
+                        continue
 
                     rows = df_items[col_barcode].tolist()
                     valid_pairs = []
@@ -681,6 +674,9 @@ class OrderApp(QMainWindow):
                                 "invoice": str(random.randint(10**9, 10**10 - 1))
                             }
 
+                    # ✅ 여기 추가
+                    self.processed_files.add(xlsx)
+
                     pct = int((idx + 1) / len(excel_files) * 30)
                     self.progressUpdated.emit(pct)
 
@@ -689,7 +685,6 @@ class OrderApp(QMainWindow):
 
             print("[first_phase] 상품정보 바코드 확인 시작")
 
-            # 🔍 상품정보 바코드 누락 자동 추가 (orders_data 안 씀)
             prod_df = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
             if "상품바코드" not in prod_df.columns:
                 raise Exception("상품정보.xlsx에 '상품바코드' 열이 없습니다.")
@@ -725,7 +720,6 @@ class OrderApp(QMainWindow):
                     if bc_lower not in known_barcodes:
                         new_barcodes.append((barcode, product_name))
 
-            # ✅ 신규 바코드 추가 시 → 재실행 플래그 ON
             added = set()
             rows_to_append = []
             for barcode, name in new_barcodes:
@@ -742,7 +736,7 @@ class OrderApp(QMainWindow):
                     ws.append(row)
                 wb.save(PRODUCT_XLSX)
 
-                self.skip_inventory_check = True  # ✅ 다음 실행 시 재고 스킵
+                self.skip_inventory_check = True
 
                 QMessageBox.information(
                     self, "상품정보 자동 추가",
@@ -752,10 +746,10 @@ class OrderApp(QMainWindow):
 
             print("[first_phase] 재고 확인 시작")
 
-            if not self.skip_inventory_check:  # ✅ 재고 스킵 플래그 체크
+            if not self.skip_inventory_check:
                 try:
-                    inv_df = load_stock_df(self.business_number)
-                    if inv_df.empty:
+                    self.cached_stock_df = load_stock_df(self.business_number)  # ✅ 캐시에 저장
+                    if self.cached_stock_df.empty:
                         QMessageBox.warning(self, "재고 시트 비어 있음", "현재 재고 시트에 데이터가 없습니다.\n계속 진행은 가능하지만 재고 확인은 생략됩니다.")
                 except Exception as e:
                     QMessageBox.warning(self, "재고 확인 경고", f"재고 정보를 불러오는 중 오류 발생: {e}\n재고 확인을 생략하고 계속 진행합니다.")
@@ -920,29 +914,33 @@ class OrderApp(QMainWindow):
     # ──────────────────────────────────────────────────────────
     def generate_orders(self):
 
-        # ── 1. 스프레드시트에 업로드할 때 모든 행 끝에 실행일시 붙이기 ──
         def append_to_google_sheet(sheet_id: str, sheet_name: str, rows: list[list[str]]):
             client = get_gspread_client()
-            ws     = client.open_by_key(sheet_id).worksheet(sheet_name)
+            ws = client.open_by_key(sheet_id).worksheet(sheet_name)
 
-            content_rows = rows[1:]                                # 헤더 제외
+            content_rows = rows[1:]  # 헤더 제외
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for row in content_rows:                               # ➡ 모든 행에 타임스탬프
+            for row in content_rows:
                 row.append(now_str)
-
+            
             ws.append_rows(content_rows, value_input_option="USER_ENTERED")
 
         try:
             # ─────────────────────────────────────────────
             # 0) 재고·확정 양식 로드
             # ─────────────────────────────────────────────
-            inv_df      = load_stock_df(self.business_number)
-            inventory   = {str(r["바코드"]).strip(): int(float(r["수량"] or 0))
+            # ✅ 캐시 우선 사용
+            if self.cached_stock_df is not None:
+                inv_df = self.cached_stock_df
+            else:
+                inv_df = load_stock_df(self.business_number, save_excel=False)
+
+            inventory = {str(r["바코드"]).strip(): int(float(r["수량"] or 0))
                         for _, r in inv_df.iterrows()}
-            used_stock  = {}
+            used_stock = {}
 
             confirm_path = "발주 확정 양식.xlsx"
-            df_confirm   = pd.read_excel(confirm_path, dtype=str).fillna("")
+            df_confirm = pd.read_excel(confirm_path, dtype=str).fillna("")
 
             df_confirm["확정수량"] = pd.to_numeric(
                 df_confirm["확정수량"], errors="coerce"
@@ -952,74 +950,65 @@ class OrderApp(QMainWindow):
             )
             df_confirm = df_confirm[df_confirm["확정수량"] > 0]
 
-            # ── 0-A.  매입가 매핑 (바코드 → 매입가) ──
             price_map = getattr(self, "price_map", {})
 
-            # ─────────────────────────────────────────────
-            # 1) 그룹핑
-            # ─────────────────────────────────────────────
             group_cols = ["Shipment", "상품바코드", "상품이름", "물류센터", "입고예정일"]
-            df_group   = (df_confirm[group_cols + ["확정수량"]]
+            df_group = (df_confirm[group_cols + ["확정수량"]]
                         .groupby(group_cols, as_index=False)["확정수량"].sum())
 
-            brand   = self.le_brand.text().strip()
-            ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+            brand = self.le_brand.text().strip()
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             biz_num = self.business_number.strip()
 
-            # ── 1-A.  헤더 두 벌 (엑셀용 / 시트용) ──
-            hed_3pl  = ["브랜드명","쉽먼트번호","발주번호","SKU번호",
-                        "SKU(제품명)","바코드","수량",
-                        "입고예정일","센터명","사업자번호"]
-            rows_3pl_file  = [hed_3pl]                 # 엑셀 저장용
-            rows_3pl_sheet = [hed_3pl + ["매입가"]]    # 시트 업로드용  (+ 매입가)
+            hed_3pl = ["브랜드명", "쉽먼트번호", "발주번호", "SKU번호",
+                    "SKU(제품명)", "바코드", "수량",
+                    "입고예정일", "센터명", "사업자번호"]
+            rows_3pl_file = [hed_3pl]
+            rows_3pl_sheet = [hed_3pl + ["매입가"]]
 
-            hed_ord = ["바코드명","바코드","상품코드","쿠팡납품센터명",
-                    "쿠팡쉽먼트번호","쿠팡입고예정일자","입고마감준수여부",
-                    "발주수량","중국재고사용여부"]
+            hed_ord = ["바코드명", "바코드", "상품코드", "쿠팡납품센터명",
+                    "쿠팡쉽먼트번호", "쿠팡입고예정일자", "입고마감준수여부",
+                    "발주수량", "중국재고사용여부"]
             rows_order = [hed_ord]
 
-            # ── 1-B.  엑셀 워크북 준비 ──
             wb_3pl, ws_3pl = Workbook(), None
-            ws_3pl = wb_3pl.active; ws_3pl.title = "3PL신청서"; ws_3pl.append(hed_3pl)
+            ws_3pl = wb_3pl.active
+            ws_3pl.title = "3PL신청서"
+            ws_3pl.append(hed_3pl)
 
             wb_ord, ws_ord = Workbook(), None
-            ws_ord = wb_ord.active; ws_ord.title = "주문서";      ws_ord.append(hed_ord)
+            ws_ord = wb_ord.active
+            ws_ord.title = "주문서"
+            ws_ord.append(hed_ord)
 
-            # ─────────────────────────────────────────────
-            # 2) 행 생성
-            # ─────────────────────────────────────────────
             for _, r in df_group.iterrows():
-                bc      = safe_strip(r["상품바코드"])
-                pname   = r["상품이름"]
-                center  = r["물류센터"]
+                bc = safe_strip(r["상품바코드"])
+                pname = r["상품이름"]
+                center = r["물류센터"]
                 ship_no = r["Shipment"]
                 eta_raw = r["입고예정일"]
-                qty     = int(r["확정수량"])
+                qty = int(r["확정수량"])
                 eta_str = (pd.to_datetime(eta_raw, errors="coerce")
                         .strftime("%Y-%m-%d") if eta_raw else "")
 
                 mask = (df_confirm["Shipment"] == ship_no) & (df_confirm["상품바코드"] == bc)
                 po_no = product_code = ""
                 if mask.any():
-                    po_no        = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
+                    po_no = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
                     product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
 
-                # 기본 행 (엑셀·시트 공통 파트)
                 row_base = [brand, ship_no, po_no, product_code,
                             pname, bc, qty, eta_str, center, biz_num]
 
-                # 2-A.  엑셀용
                 rows_3pl_file.append(row_base)
                 ws_3pl.append(row_base)
 
-                # 2-B.  시트용 = 기본 + 매입가
                 purchase = price_map.get(bc, "")
                 rows_3pl_sheet.append(row_base + [purchase])
 
-                # 주문서(재고 부족분)
                 already = used_stock.get(bc, 0)
-                avail   = inventory.get(bc, 0) - already
-                need    = max(qty - max(avail, 0), 0)
+                avail = inventory.get(bc, 0) - already
+                need = max(qty - max(avail, 0), 0)
 
                 if need > 0:
                     row_ord = [pname, bc, product_code, center,
@@ -1029,16 +1018,13 @@ class OrderApp(QMainWindow):
 
                 used_stock[bc] = already + min(qty, max(avail, 0))
 
-            # ─────────────────────────────────────────────
-            # 3) Google Sheets 업로드
-            # ─────────────────────────────────────────────
             append_to_google_sheet(
                 sheet_id=SHEET_ID_MASTER,
                 sheet_name="CALL 요청서",
-                rows=rows_3pl_sheet            # ← 매입가 포함 버전
+                rows=rows_3pl_sheet
             )
 
-            if len(rows_order) == 1:           # 주문할 항목 없음
+            if len(rows_order) == 1:
                 ws_ord.cell(row=2, column=1).value = "재고가 충분하여 주문할 항목이 없습니다."
                 append_to_google_sheet(
                     sheet_id=SHEET_ID_MASTER,
@@ -1052,9 +1038,6 @@ class OrderApp(QMainWindow):
                     rows=rows_order
                 )
 
-            # ─────────────────────────────────────────────
-            # 4) 로컬 파일 저장
-            # ─────────────────────────────────────────────
             wb_3pl.save(f"3PL신청내역_{ts}.xlsx")
             wb_ord.save(f"주문서_{ts}.xlsx")
 
