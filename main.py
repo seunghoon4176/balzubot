@@ -195,6 +195,8 @@ def load_stock_df(biz_num: str, save_excel: bool = True) -> pd.DataFrame:
         client = get_gspread_client()
         sheet = client.open_by_key(SHEET_ID_MASTER)
 
+        # ─────────────────────────────
+        # ✅ 재고 리스트 처리
         ws_stock = sheet.worksheet("재고 리스트")
         data_stock = ws_stock.get_all_values()
         header = data_stock[0]
@@ -204,6 +206,7 @@ def load_stock_df(biz_num: str, save_excel: bool = True) -> pd.DataFrame:
 
         df_stock = pd.DataFrame(records, columns=header).fillna("")
 
+        # 열 이름 유연하게 찾기
         def find_column(possible_names: list[str]) -> str | None:
             for key in possible_names:
                 for col in df_stock.columns:
@@ -211,57 +214,70 @@ def load_stock_df(biz_num: str, save_excel: bool = True) -> pd.DataFrame:
                         return col
             return None
 
-        sku_col = find_column(["SKU", "상품코드"])
+        sku_col  = find_column(["SKU", "상품코드"])
         name_col = find_column(["제품명", "상품명"])
-        bc_col = find_column(["바코드", "barcode"])
-        qty_col = find_column(["수량", "재고", "재고수량"])
-        biz_col = find_column(["사업자 번호", "사업자", "사업자등록번호"])
+        bc_col   = find_column(["바코드", "barcode"])
+        qty_col  = find_column(["수량", "재고", "재고수량"])
+        biz_col  = find_column(["사업자 번호", "사업자", "사업자등록번호"])
 
         if not all([sku_col, name_col, bc_col, qty_col, biz_col]):
-            print("[재고 시트 오류] 필수 열 누락")
+            print("[재고 시트 오류] 필수 열 누락 - SKU, 제품명, 바코드, 수량, 사업자번호 중 하나가 없습니다.")
             return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
 
         df_filtered = df_stock[df_stock[biz_col].astype(str).str.strip() == biz_num]
 
         if df_filtered.empty:
-            print(f"[INFO] 재고 시트에 해당 사업자번호 {biz_num} 데이터 없음")
+            print(f"[INFO] 재고 시트에 해당 사업자번호 {biz_num} 에 대한 데이터 없음")
             return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
 
         df_result = df_filtered[[sku_col, name_col, bc_col, qty_col]]
         df_result.columns = ["SKU", "상품명", "바코드", "수량"]
 
-        # 🔥 이 부분 완전히 차단 (혹시라도 다른 데서 엉켜있을 수 있으니)
+        # ─────────────────────────────
+        # ✅ 저장: 재고 + 입출고
         if save_excel:
+            if getattr(sys, 'frozen', False):
+                # PyInstaller 실행 중
+                base_dir = Path(sys.executable).parent
+            else:
+                base_dir = Path(__file__).parent
+
+            save_dir = base_dir
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rand_suffix = randint(1000, 9999)
+
+            stock_path = save_dir / f"재고_{biz_num}_{ts}_{rand_suffix}.xlsx"
+            df_result.to_excel(stock_path, index=False)
+            print(f"[INFO] 재고 저장 완료: {stock_path}")
+
+            # ─────────────────────────────
+            # ✅ 입출고 리스트 처리
             try:
-                save_dir = Path.home() / "Downloads" / "balzubot"
-                save_dir.mkdir(parents=True, exist_ok=True)
+                ws_inout = sheet.worksheet("입출고 리스트")
+                data_inout = ws_inout.get_all_values()
+                df_inout = pd.DataFrame(data_inout[1:], columns=data_inout[0]).fillna("")
 
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                rand_suffix = randint(1000, 9999)
-                path = save_dir / f"재고_{biz_num}_{ts}_{rand_suffix}.xlsx"
+                biz_col_io = next((c for c in df_inout.columns if "사업자 번호" in c), None)
 
-                # 🔥 파일이 이미 열려있는지 확인
-                if path.exists():
-                    print(f"[WARN] 파일이 이미 존재: {path}")
-                    # 파일이 열려있으면 삭제하고 새로 만들기
-                    try:
-                        os.remove(path)
-                        print(f"[INFO] 기존 파일 삭제: {path}")
-                    except Exception as e:
-                        print(f"[ERROR] 파일 삭제 실패: {e}")
-                        raise Exception(f"파일 삭제 실패: {e}")
+                if biz_col_io:
+                    df_filtered_io = df_inout[df_inout[biz_col_io].astype(str).str.strip() == biz_num]
 
-                df_result.to_excel(path, index=False)
-                print(f"[INFO] 재고 저장 완료: {path}")
-            except Exception as e:
-                print(f"[ERROR] 파일 저장 중 오류: {e}")
-                raise e
+                    if not df_filtered_io.empty:
+                        io_path = save_dir / f"입출고리스트_{biz_num}_{ts}_{rand_suffix}.xlsx"
+                        df_filtered_io.to_excel(io_path, index=False)
+                        print(f"[INFO] 입출고리스트 저장 완료: {io_path}")
+                else:
+                    print("[INFO] 입출고리스트에서 '사업자 번호' 열을 찾지 못했습니다.")
+            except Exception as e_io:
+                print(f"[WARN] 입출고리스트 시트 처리 중 오류: {e_io}")
 
         return df_result
 
     except Exception as e:
         print("[load_stock_df 예외 발생]", type(e), e)
-        traceback.print_exc()  # 🔥 여기가 핵심
+        traceback.print_exc()
         return pd.DataFrame(columns=["SKU", "상품명", "바코드", "수량"])
 
 
@@ -466,7 +482,7 @@ class OrderApp(QMainWindow):
             QMessageBox.warning(self, "사업자번호 없음", "먼저 설정에서 사업자번호를 입력하세요.")
             return
         try:
-            result_df = load_stock_df(self.business_number, save_excel=False) 
+            result_df = load_stock_df(self.business_number, save_excel=True) 
             if result_df.empty:
                 QMessageBox.information(self, "완료", "해당 사업자의 재고 데이터가 없습니다.")
             else:
