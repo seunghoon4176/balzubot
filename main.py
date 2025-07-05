@@ -35,8 +35,8 @@ from pathlib import Path
 from random import randint
 import traceback
 
-#SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" 
-SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" 
+SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" 
+#SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" 
 
 STOCK_SHEET_CSV = (
     f"https://docs.google.com/spreadsheets/d/{SHEET_ID_MASTER}/export"
@@ -1090,7 +1090,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.0.8"
+        LOCAL_VERSION = "1.0.9"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
