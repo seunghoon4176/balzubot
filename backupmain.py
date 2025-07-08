@@ -25,14 +25,55 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import re  
-from order_processor import process_order_zip
+from order import process_order_zip
+
+import google.auth
+import google.auth.transport.requests
+import google.oauth2.service_account
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 # build command: pyinstaller --noconsole --onefile --icon=images/cashbot.ico main.py
 
 CONFIG_FILE = "config.json"
-LOCAL_VERSION = "1.0.0"  # 현재 프로그램 버전
+LOCAL_VERSION = "1.0.1"  # 현재 프로그램 버전
 VERSION_URL = "https://seunghoon4176.github.io/balzubot/version.json"
 
+def get_drive_service():
+    cred_path = os.path.join(os.path.dirname(__file__), "google_credentials.json")
+    with open(cred_path, "r", encoding="utf-8") as f:
+        credentials_dict = json.load(f)
+    credentials_dict["private_key"] = credentials_dict["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    service = build("drive", "v3", credentials=creds)
+    return service
+
+
+def upload_folder_to_drive(folder_path, drive_folder_id="0AIUiN0FF2S3SUk9PVA"):
+    service = get_drive_service()
+
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        if not os.path.isfile(file_path):
+            continue
+
+        file_metadata = {
+            "name": filename,
+            "parents": [drive_folder_id],
+        }
+
+        media = MediaFileUpload(file_path, resumable=True)
+        uploaded = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True  # 공유 드라이브 대응
+        ).execute()
+        print(f"✔ 업로드 완료: {filename} → File ID: {uploaded['id']}")
 
 def check_version_or_exit():
     try:
@@ -584,33 +625,25 @@ class OrderApp(QMainWindow):
         threading.Thread(target=self.crawl_and_generate).start()
 
     def crawl_and_generate(self):
-        """
-        실제 크롤링 및 엑셀 생성 로직을 수행한 뒤,
-        성공 시 crawlFinished.emit(msg), 실패 시 crawlError.emit(errmsg)
-        """
-        import re  # (함수 내부에 두면 상단 import 수정 없이도 동작)
-
         try:
             driver = self.driver
             self.progressUpdated.emit(30)
 
             driver.get("https://supplier.coupang.com/dashboard/KR")
 
-            # ── 1) Logistics → Shipments 메뉴 진입 ────────────────────────
+            # ── 1) 메뉴 진입
             try:
                 btn_logistics = WebDriverWait(driver, 15).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='/logistics']"))
-                )
-                btn_logistics.click()
+                ); btn_logistics.click()
 
                 btn_shipments = WebDriverWait(driver, 15).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='/ibs/asn/active']"))
-                )
-                btn_shipments.click()
-            except Exception:
+                ); btn_shipments.click()
+            except:
                 raise Exception("메뉴 클릭 실패 (Logistics → Shipments)")
 
-            # ── 2) 발주번호 입력창 확인 ───────────────────────────────────
+            # ── 2) 발주번호 입력창
             try:
                 search_input = WebDriverWait(driver, 15).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "input#purchaseOrderSeq"))
@@ -618,100 +651,72 @@ class OrderApp(QMainWindow):
             except:
                 raise Exception("발주번호 입력창을 찾지 못했습니다.")
 
-            # ── 3) 다운로드·저장 폴더 지정 ────────────────────────────────
             download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-
-            # 모든 PDF·엑셀을 한곳에 모을 최종 폴더
             target_dir = os.path.join(os.getcwd(), "shipment")
             os.makedirs(target_dir, exist_ok=True)
 
-            # ── 4) 주문별 라벨·매니페스트 다운로드 ──────────────────────────
             total = len(self.orders_data)
             for idx, (po_no, info) in enumerate(self.orders_data.items()):
-                # 검색
-                search_input.clear()
-                search_input.send_keys(po_no)
-                try:
-                    driver.find_element(By.CSS_SELECTOR, "button#shipment-search-btn").click()
-                except:
-                    raise Exception("검색 버튼 클릭 실패")
+                search_input.clear(); search_input.send_keys(po_no)
+                driver.find_element(By.CSS_SELECTOR, "button#shipment-search-btn").click()
 
-                # Shipment 번호 추출
                 try:
                     first_td = WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located((
-                            By.CSS_SELECTOR,
-                            "table#parcel-tab tbody tr:first-child td:first-child"
-                        ))
-                    )
-                    shipment_no = first_td.text.strip()
+                        EC.presence_of_element_located((By.CSS_SELECTOR,
+                            "table#parcel-tab tbody tr:first-child td:first-child"))
+                    ); shipment_no = first_td.text.strip()
                 except:
                     shipment_no = ""
 
-                # 캐싱
-                center = info["center"]
-                eta    = info["eta"]
-                key    = f"{center}|{eta.strftime('%Y-%m-%d') if eta else ''}"
-                self.cached_shipment[key]      = shipment_no
+                center, eta = info["center"], info["eta"]
+                key = f"{center}|{eta.strftime('%Y-%m-%d') if eta else ''}"
+                self.cached_shipment[key] = shipment_no
                 self.orders_data[po_no]["shipment"] = shipment_no
 
-                # 다운로드
                 if shipment_no:
                     try:
                         driver.execute_script(
                             f"window.open('https://supplier.coupang.com/ibs/shipment/parcel/"
                             f"pdf-label/generate?parcelShipmentSeq={shipment_no}', '_blank');"
-                        )
-                        time.sleep(1.5)
+                        ); time.sleep(1.5)
                         driver.execute_script(
                             f"window.open('https://supplier.coupang.com/ibs/shipment/parcel/"
                             f"pdf-manifest/generate?parcelShipmentSeq={shipment_no}', '_blank');"
-                        )
-                        time.sleep(1.5)
+                        ); time.sleep(1.5)
                     except Exception as e:
                         print(f"[경고] {shipment_no} 다운로드 중 오류: {e}")
 
-                # 진행률
                 percent = 30 + int((idx + 1) / total * 40)
                 self.progressUpdated.emit(percent)
 
-            # ── 5) 다운로드 완료 대기 후 파일 정리 ────────────────────────
-            time.sleep(5)  # 네트워크 상태에 따라 조정
-
-            dup_pat = re.compile(r"\s\(\d+\)(\.[^.]+)$")   # " (1).pdf", " (2).xlsx" …
+            # ── 3) 다운로드 파일 이동
+            time.sleep(5)
+            dup_pat = re.compile(r"\s\(\d+\)(\.[^.]+)$")
 
             for fname in os.listdir(download_dir):
                 low = fname.lower()
                 if not (low.startswith("shipment_label_document") or
                         low.startswith("shipment_manifest_document")):
-                    continue  # 다른 파일은 건드리지 않음
-
+                    continue
                 src = os.path.join(download_dir, fname)
 
-                # (1) 중복본은 삭제 (뒤에 " (1)", " (2)" 붙은 파일)
                 if dup_pat.search(fname):
-                    try:
-                        os.remove(src)
-                    except FileNotFoundError:
-                        pass
+                    try: os.remove(src)
+                    except FileNotFoundError: pass
                     continue
 
-                # (2) 원본은 ./shipment 로 이동
                 shutil.move(src, os.path.join(target_dir, fname))
 
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")          # ① 타임스탬프 생성
-            zip_path = shutil.make_archive(f"shipment_{ts}", "zip", target_dir) 
+            # ── 4) Google Drive 업로드
             try:
-                shutil.rmtree(target_dir)
-            except Exception as e_del:
-                print(f"[경고] shipment 폴더 삭제 실패: {e_del}")
+                upload_folder_to_drive(target_dir)
+                print("📁 Google Drive 업로드 완료")
+            except Exception as e:
+                print(f"[경고] Google Drive 업로드 실패: {e}")
 
-            # ── 6) 마무리 ────────────────────────────────────────────────
-            driver.quit()
-            self.driver = None
-
+            driver.quit(); self.driver = None
             self.progressUpdated.emit(100)
-            self.crawlFinished.emit("발주확정 파일(라벨·매니페스트)이 모두 생성되었습니다.")
+            self.crawlFinished.emit("발주확정 라벨/매니페스트 다운로드 및 업로드 완료!")
 
         except Exception as e:
             print("crawl_and_generate 예외 발생:", e)
