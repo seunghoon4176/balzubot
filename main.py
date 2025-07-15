@@ -982,9 +982,11 @@ class OrderApp(QMainWindow):
             rows_3pl_file = [hed_3pl]
             rows_3pl_sheet = [hed_3pl + ["매입가"]]
 
-            hed_ord = ["바코드명", "바코드", "상품코드", "쿠팡납품센터명",
-                    "쿠팡쉽먼트번호", "쿠팡입고예정일자", "입고마감준수여부",
-                    "발주수량", "중국재고사용여부"]
+            hed_ord = [
+                "바코드명", "바코드", "상품코드", "쿠팡납품센터명",
+                "쿠팡쉽먼트번호", "쿠팡입고예정일자", "입고마감준수여부",
+                "발주수량", "중국재고사용여부", "제조일자", "유통기한"
+            ]
             rows_order = [hed_ord]
 
             wb_3pl, ws_3pl = Workbook(), None
@@ -997,6 +999,67 @@ class OrderApp(QMainWindow):
             ws_ord.title = "주문서"
             ws_ord.append(hed_ord)
 
+
+            # 제조일자/유통기한/유통기한관리 매핑 준비 (발주서리스트에서 추출)
+            mfg_map = {}  # {barcode: 제조일자}
+            exp_map = {}  # {barcode: 유통기한}
+            exp_flag_map = {}  # {barcode: 유통기한관리(Y/N)}
+            # 발주서리스트 파일을 원본 경로에서 찾기
+            order_folder = self.order_zip_path if hasattr(self, "order_zip_path") else None
+            list_path = None
+            if order_folder and os.path.isdir(order_folder):
+                for fname in os.listdir(order_folder):
+                    if "발주서리스트" in fname and fname.lower().endswith((".xls", ".xlsx")):
+                        list_path = os.path.join(order_folder, fname)
+                        break
+            # 발주서리스트 파일에서 제조일자/유통기한/유통기한관리 추출
+            if list_path and os.path.exists(list_path):
+                try:
+                    df_list = pd.read_excel(list_path, dtype=str, header=[19, 20]).fillna("")
+                    df_list.columns = [' '.join(str(s).strip() for s in col if str(s).strip()) for col in df_list.columns]
+                    # 바코드, 제조일자, 유통기한, 유통기한관리 컬럼 유연하게 찾기 (줄바꿈, 복합명칭 대응)
+                    def col_find(keywords):
+                        for c in df_list.columns:
+                            c_clean = c.replace(" ", "").replace("\n", "").replace("\r", "").lower()
+                            if any(k in c_clean for k in keywords):
+                                return c
+                        return None
+
+                    col_bar = col_find(["barcode", "바코드"])
+                    # 제조(수입)일자, 제조일자, 수입일자 등 모두 대응
+                    col_mfg = col_find(["제조", "수입"])
+                    # 유통(소비)기한, 유통기한, 소비기한 등 모두 대응
+                    col_exp = col_find(["유통기한", "소비기한"])
+                    # 유통(소비)기한관리, 유통기한관리 등 모두 대응
+                    col_exp_flag = col_find(["유통기한관리", "소비기한관리"])
+                    if col_bar and (col_mfg or col_exp):
+                        rows = df_list[col_bar].tolist()
+                        mfgs = df_list[col_mfg].tolist() if col_mfg else ["" for _ in range(len(rows))]
+                        exps = df_list[col_exp].tolist() if col_exp else ["" for _ in range(len(rows))]
+                        exp_flags = df_list[col_exp_flag].tolist() if col_exp_flag else ["" for _ in range(len(rows))]
+                        i = 0
+                        while i < len(rows) - 1:
+                            barcode = str(rows[i + 1]).strip()
+                            mfg = str(mfgs[i]).strip() if i < len(mfgs) else ""
+                            exp = str(exps[i]).strip() if i < len(exps) else ""
+                            exp_flag = str(exp_flags[i]).strip().upper() if i < len(exp_flags) else ""
+                            if barcode.startswith("R"):
+                                if barcode and mfg:
+                                    mfg_map[barcode] = mfg
+                                if barcode:
+                                    if exp:
+                                        exp_map[barcode] = exp
+                                    if exp_flag:
+                                        exp_flag_map[barcode] = exp_flag
+                                i += 2
+                            else:
+                                i += 1
+                except Exception as e:
+                    print(f"[WARN] 제조일자/유통기한/유통기한관리 추출 실패: {e}")
+            else:
+                print("[WARN] 발주서리스트 원본 파일을 찾을 수 없습니다.")
+
+
             for _, r in df_group.iterrows():
                 bc = safe_strip(r["상품바코드"])
                 pname = r["상품이름"]
@@ -1004,8 +1067,7 @@ class OrderApp(QMainWindow):
                 ship_no = r["Shipment"]
                 eta_raw = r["입고예정일"]
                 qty = int(r["확정수량"])
-                eta_str = (pd.to_datetime(eta_raw, errors="coerce")
-                        .strftime("%Y-%m-%d") if eta_raw else "")
+                eta_str = (pd.to_datetime(eta_raw, errors="coerce").strftime("%Y-%m-%d") if eta_raw else "")
 
                 mask = (df_confirm["Shipment"] == ship_no) & (df_confirm["상품바코드"] == bc)
                 po_no = product_code = ""
@@ -1026,9 +1088,27 @@ class OrderApp(QMainWindow):
                 avail = inventory.get(bc, 0) - already
                 need = max(qty - max(avail, 0), 0)
 
+                # 제조일자/유통기한/유통기한관리 매핑
+                exp_flag = exp_flag_map.get(bc, "Y")  # 기본값 Y
+                mfg_val = ""
+                exp_val = ""
+                if exp_flag == "Y":
+                    mfg_val = mfg_map.get(bc, "")
+                    # 제조일자가 있으면 유통기한은 제조일자 + 1년
+                    if mfg_val:
+                        try:
+                            mfg_dt = pd.to_datetime(mfg_val, errors="coerce")
+                            if pd.notna(mfg_dt):
+                                exp_val = (mfg_dt + pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+                            else:
+                                exp_val = ""
+                        except Exception:
+                            exp_val = ""
+                # N이면 둘 다 빈칸
+                # need > 0일 때만 주문서에 추가
                 if need > 0:
                     row_ord = [pname, bc, product_code, center,
-                            ship_no, eta_str, "Y", need, "N"]
+                            ship_no, eta_str, "Y", need, "N", mfg_val, exp_val]
                     rows_order.append(row_ord)
                     ws_ord.append(row_ord)
 
