@@ -1012,48 +1012,47 @@ class OrderApp(QMainWindow):
                     if "발주서리스트" in fname and fname.lower().endswith((".xls", ".xlsx")):
                         list_path = os.path.join(order_folder, fname)
                         break
-            # 발주서리스트 파일에서 제조일자/유통기한/유통기한관리 추출
+
+            # 발주서리스트 파일에서 제조일자/유통기한/유통기한관리 추출 (컬럼명 자동 인식)
             if list_path and os.path.exists(list_path):
                 try:
-                    df_list = pd.read_excel(list_path, dtype=str, header=[19, 20]).fillna("")
-                    df_list.columns = [' '.join(str(s).strip() for s in col if str(s).strip()) for col in df_list.columns]
-                    # 바코드, 제조일자, 유통기한, 유통기한관리 컬럼 유연하게 찾기 (줄바꿈, 복합명칭 대응)
-                    def col_find(keywords):
-                        for c in df_list.columns:
-                            c_clean = c.replace(" ", "").replace("\n", "").replace("\r", "").lower()
-                            if any(k in c_clean for k in keywords):
-                                return c
+                    wb = openpyxl.load_workbook(list_path)
+                    ws = wb.active
+                    rows = list(ws.iter_rows(values_only=True))
+                    # 헤더(21, 22행)에서 컬럼명 인덱스 찾기
+                    header1 = rows[19] if len(rows) > 19 else None
+                    header2 = rows[20] if len(rows) > 20 else None
+                    def find_col_idx(header_rows, keywords):
+                        for header in header_rows:
+                            if not header:
+                                continue
+                            for idx, val in enumerate(header):
+                                if val:
+                                    for kw in keywords:
+                                        if kw in str(val):
+                                            return idx
                         return None
-
-                    col_bar = col_find(["barcode", "바코드"])
-                    # 제조(수입)일자, 제조일자, 수입일자 등 모두 대응
-                    col_mfg = col_find(["제조", "수입"])
-                    # 유통(소비)기한, 유통기한, 소비기한 등 모두 대응
-                    col_exp = col_find(["유통기한", "소비기한"])
-                    # 유통(소비)기한관리, 유통기한관리 등 모두 대응
-                    col_exp_flag = col_find(["유통기한관리", "소비기한관리"])
-                    if col_bar and (col_mfg or col_exp):
-                        rows = df_list[col_bar].tolist()
-                        mfgs = df_list[col_mfg].tolist() if col_mfg else ["" for _ in range(len(rows))]
-                        exps = df_list[col_exp].tolist() if col_exp else ["" for _ in range(len(rows))]
-                        exp_flags = df_list[col_exp_flag].tolist() if col_exp_flag else ["" for _ in range(len(rows))]
-                        i = 0
-                        while i < len(rows) - 1:
-                            barcode = str(rows[i + 1]).strip()
-                            mfg = str(mfgs[i]).strip() if i < len(mfgs) else ""
-                            exp = str(exps[i]).strip() if i < len(exps) else ""
-                            exp_flag = str(exp_flags[i]).strip().upper() if i < len(exp_flags) else ""
-                            if barcode.startswith("R"):
-                                if barcode and mfg:
-                                    mfg_map[barcode] = mfg
-                                if barcode:
-                                    if exp:
-                                        exp_map[barcode] = exp
-                                    if exp_flag:
-                                        exp_flag_map[barcode] = exp_flag
-                                i += 2
-                            else:
-                                i += 1
+                    idx_barcode = find_col_idx([header1, header2], ["바코드", "BARCODE"])
+                    idx_mfg = find_col_idx([header1, header2], ["제조일자"])
+                    idx_exp = find_col_idx([header1, header2], ["유통기한"])
+                    idx_expflag = find_col_idx([header1, header2], ["유통기한관리", "제조일자관리"])
+                    # 21번째(엑셀 22행)부터 2줄씩
+                    for i in range(21, len(rows), 2):
+                        row1 = rows[i]
+                        row2 = rows[i+1] if i+1 < len(rows) else None
+                        if not row2:
+                            continue
+                        barcode = row2[idx_barcode] if idx_barcode is not None and len(row2) > idx_barcode else None
+                        mfg_date = row1[idx_mfg] if idx_mfg is not None and len(row1) > idx_mfg else None
+                        exp_date = row1[idx_exp] if idx_exp is not None and len(row1) > idx_exp else None
+                        exp_flag = row1[idx_expflag] if idx_expflag is not None and len(row1) > idx_expflag else None
+                        if barcode and str(barcode).startswith("R"):
+                            if mfg_date:
+                                mfg_map[barcode] = mfg_date
+                            if exp_date:
+                                exp_map[barcode] = exp_date
+                            if exp_flag:
+                                exp_flag_map[barcode] = exp_flag
                 except Exception as e:
                     print(f"[WARN] 제조일자/유통기한/유통기한관리 추출 실패: {e}")
             else:
@@ -1088,23 +1087,26 @@ class OrderApp(QMainWindow):
                 avail = inventory.get(bc, 0) - already
                 need = max(qty - max(avail, 0), 0)
 
-                # 제조일자/유통기한/유통기한관리 매핑
-                exp_flag = exp_flag_map.get(bc, "Y")  # 기본값 Y
-                mfg_val = ""
+                # 제조일자/유통기한/유통기한관리 매핑 (바코드별 인덱스 매칭)
+                def get_split_val(map_obj, bc):
+                    return map_obj.get(bc, "")
+
+                exp_flag_val = exp_flag_map.get(bc, "Y")
+                has_y = str(exp_flag_val).strip().upper() == "Y"
+                mfg_val = get_split_val(mfg_map, bc)
                 exp_val = ""
-                if exp_flag == "Y":
-                    mfg_val = mfg_map.get(bc, "")
-                    # 제조일자가 있으면 유통기한은 제조일자 + 1년
+                # 디버깅용 출력
+                print(f"[DEBUG] bc={bc} exp_flag={exp_flag_val} mfg={mfg_val}")
+                if has_y:
                     if mfg_val:
                         try:
                             mfg_dt = pd.to_datetime(mfg_val, errors="coerce")
                             if pd.notna(mfg_dt):
-                                exp_val = (mfg_dt + pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+                                exp_val = "제조일로부터 1년"
                             else:
                                 exp_val = ""
                         except Exception:
                             exp_val = ""
-                # N이면 둘 다 빈칸
                 # need > 0일 때만 주문서에 추가
                 if need > 0:
                     row_ord = [pname, bc, product_code, center,
