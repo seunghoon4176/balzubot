@@ -1078,9 +1078,11 @@ class OrderApp(QMainWindow):
                 has_y = str(exp_flag_val).strip().upper() == "Y"
                 mfg_val = get_split_val(mfg_map, bc)
                 exp_val = ""
-                # 디버깅용 출력
-                print(f"[DEBUG] bc={bc} exp_flag={exp_flag_val} mfg={mfg_val}")
-                if has_y:
+                # exp_flag가 N이면 제조일자/유통기한 모두 비움
+                if not has_y:
+                    mfg_val = ""
+                    exp_val = ""
+                else:
                     if mfg_val:
                         try:
                             mfg_dt = pd.to_datetime(mfg_val, errors="coerce")
@@ -1120,6 +1122,20 @@ class OrderApp(QMainWindow):
                 )
 
             wb_3pl.save(f"3PL신청내역_{ts}.xlsx")
+
+            # 주문서 시트의 제조일자 열(10번째)에 대해 날짜 포맷 적용
+            for row in ws_ord.iter_rows(min_row=2, min_col=10, max_col=10):
+                cell = row[0]
+                if cell.value:
+                    try:
+                        # 날짜로 변환 가능한 경우만 포맷 적용
+                        dt = pd.to_datetime(cell.value, errors="coerce")
+                        if pd.notna(dt):
+                            cell.value = dt.date()
+                            cell.number_format = "yyyy-mm-dd"
+                    except Exception:
+                        pass
+
             wb_ord.save(f"주문서_{ts}.xlsx")
 
             QMessageBox.information(
@@ -1171,7 +1187,7 @@ if __name__ == "__main__":
 
     try:
         VERSION_URL = "http://114.207.245.49/version"
-        LOCAL_VERSION = "1.1.0"
+        LOCAL_VERSION = "1.1.1"
         r = requests.get(VERSION_URL, timeout=5)
         if r.status_code == 200:
             data = r.json()
