@@ -1004,57 +1004,40 @@ class OrderApp(QMainWindow):
             mfg_map = {}  # {barcode: 제조일자}
             exp_map = {}  # {barcode: 유통기한}
             exp_flag_map = {}  # {barcode: 유통기한관리(Y/N)}
-            # 발주서리스트 파일을 원본 경로에서 찾기
+            # order_folder 내 모든 발주서리스트 파일을 순회
             order_folder = self.order_zip_path if hasattr(self, "order_zip_path") else None
-            list_path = None
+            list_paths = []
             if order_folder and os.path.isdir(order_folder):
                 for fname in os.listdir(order_folder):
                     if "발주서리스트" in fname and fname.lower().endswith((".xls", ".xlsx")):
-                        list_path = os.path.join(order_folder, fname)
-                        break
+                        list_paths.append(os.path.join(order_folder, fname))
 
-            # 발주서리스트 파일에서 제조일자/유통기한/유통기한관리 추출 (컬럼명 자동 인식)
-            if list_path and os.path.exists(list_path):
-                try:
-                    wb = openpyxl.load_workbook(list_path)
-                    ws = wb.active
-                    rows = list(ws.iter_rows(values_only=True))
-                    # 헤더(21, 22행)에서 컬럼명 인덱스 찾기
-                    header1 = rows[19] if len(rows) > 19 else None
-                    header2 = rows[20] if len(rows) > 20 else None
-                    def find_col_idx(header_rows, keywords):
-                        for header in header_rows:
-                            if not header:
+            if list_paths:
+                for list_path in list_paths:
+                    try:
+                        wb = openpyxl.load_workbook(list_path)
+                        ws = wb.active
+                        rows = list(ws.iter_rows(values_only=True))
+                        # 21번째(엑셀 22행)부터 2줄씩
+                        for i in range(21, len(rows), 2):
+                            row1 = rows[i]
+                            row2 = rows[i+1] if i+1 < len(rows) else None
+                            if not row2:
                                 continue
-                            for idx, val in enumerate(header):
-                                if val:
-                                    for kw in keywords:
-                                        if kw in str(val):
-                                            return idx
-                        return None
-                    idx_barcode = find_col_idx([header1, header2], ["바코드", "BARCODE"])
-                    idx_mfg = find_col_idx([header1, header2], ["제조일자"])
-                    idx_exp = find_col_idx([header1, header2], ["유통기한"])
-                    idx_expflag = find_col_idx([header1, header2], ["유통기한관리", "제조일자관리"])
-                    # 21번째(엑셀 22행)부터 2줄씩
-                    for i in range(21, len(rows), 2):
-                        row1 = rows[i]
-                        row2 = rows[i+1] if i+1 < len(rows) else None
-                        if not row2:
-                            continue
-                        barcode = row2[idx_barcode] if idx_barcode is not None and len(row2) > idx_barcode else None
-                        mfg_date = row1[idx_mfg] if idx_mfg is not None and len(row1) > idx_mfg else None
-                        exp_date = row1[idx_exp] if idx_exp is not None and len(row1) > idx_exp else None
-                        exp_flag = row1[idx_expflag] if idx_expflag is not None and len(row1) > idx_expflag else None
-                        if barcode and str(barcode).startswith("R"):
-                            if mfg_date:
-                                mfg_map[barcode] = mfg_date
-                            if exp_date:
-                                exp_map[barcode] = exp_date
-                            if exp_flag:
-                                exp_flag_map[barcode] = exp_flag
-                except Exception as e:
-                    print(f"[WARN] 제조일자/유통기한/유통기한관리 추출 실패: {e}")
+                            # 인덱스: row1[16]=관리, row1[17]=제조일자, row2[2]=바코드
+                            barcode = row2[2] if len(row2) > 2 else None
+                            mfg_date = row1[17] if len(row1) > 17 else None
+                            exp_date = row1[17] if len(row1) > 17 else None
+                            exp_flag = row1[16] if len(row1) > 16 else None
+                            if barcode and str(barcode).startswith("R"):
+                                if mfg_date:
+                                    mfg_map[barcode] = mfg_date
+                                if exp_date:
+                                    exp_map[barcode] = exp_date
+                                if exp_flag:
+                                    exp_flag_map[barcode] = exp_flag
+                    except Exception as e:
+                        print(f"[WARN] 제조일자/유통기한/유통기한관리 추출 실패: {e} ({list_path})")
             else:
                 print("[WARN] 발주서리스트 원본 파일을 찾을 수 없습니다.")
 
