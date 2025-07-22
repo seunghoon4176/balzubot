@@ -35,8 +35,8 @@ from pathlib import Path
 from random import randint
 import traceback
 
-SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" #메인 시트
-#SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" #회사 내부용 시트
+#SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" #메인 시트
+SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" #회사 내부용 시트
 
 STOCK_SHEET_CSV = (
     f"https://docs.google.com/spreadsheets/d/{SHEET_ID_MASTER}/export"
@@ -702,11 +702,12 @@ class OrderApp(QMainWindow):
             print("[first_phase] 상품정보 바코드 확인 시작")
 
             prod_df = pd.read_excel(PRODUCT_XLSX, dtype=str).fillna("")
+
             if "상품바코드" not in prod_df.columns:
                 raise Exception("상품정보.xlsx에 '상품바코드' 열이 없습니다.")
 
             known_barcodes = set(prod_df["상품바코드"].astype(str).str.strip().str.lower())
-            new_barcodes = []
+            new_products = []  # (barcode, name, product_code)
 
             for xlsx in excel_files:
                 df_items = pd.read_excel(xlsx, header=19, dtype=str).fillna("")
@@ -714,34 +715,37 @@ class OrderApp(QMainWindow):
                 df_items.columns = df_items.columns.str.strip()
 
                 col_barcode = next((c for c in df_items.columns if "BARCODE" in c.upper() or "바코드" in c), None)
+                col_code = next((c for c in df_items.columns if "상품코드" in c or "SKU" in c.upper()), None)
                 if not col_barcode:
                     continue
 
                 rows = df_items[col_barcode].tolist()
-                valid_pairs = []
+                codes = df_items[col_code].tolist() if col_code else ["" for _ in range(len(rows))]
+                valid_triples = []
                 i = 0
                 while i < len(rows) - 1:
                     name = str(rows[i]).strip()
                     barcode = str(rows[i + 1]).strip()
+                    product_code = str(codes[i]).strip() if i < len(codes) else ""
                     if barcode.startswith("R"):
-                        valid_pairs.append((name, barcode))
+                        valid_triples.append((name, barcode, product_code))
                         i += 2
                     else:
                         i += 1
 
-                for product_name, barcode in valid_pairs:
+                for product_name, barcode, product_code in valid_triples:
                     if not barcode:
                         continue
                     bc_lower = barcode.lower()
                     if bc_lower not in known_barcodes:
-                        new_barcodes.append((barcode, product_name))
+                        new_products.append((barcode, product_name, product_code))
 
             added = set()
             rows_to_append = []
-            for barcode, name in new_barcodes:
+            for barcode, name, product_code in new_products:
                 bc_lower = barcode.lower()
                 if bc_lower not in added:
-                    row = [barcode, name, ""] + [""] * (len(PRODUCT_HEADERS) - 3)
+                    row = [barcode, name, product_code] + [""] * (len(PRODUCT_HEADERS) - 3)
                     rows_to_append.append(row)
                     added.add(bc_lower)
 
