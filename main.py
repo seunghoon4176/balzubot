@@ -35,8 +35,8 @@ from pathlib import Path
 from random import randint
 import traceback
 
-#SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" #메인 시트
-SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" #회사 내부용 시트
+SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" #메인 시트
+#SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" #회사 내부용 시트
 
 STOCK_SHEET_CSV = (
     f"https://docs.google.com/spreadsheets/d/{SHEET_ID_MASTER}/export"
