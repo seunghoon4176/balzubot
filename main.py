@@ -35,8 +35,8 @@ from pathlib import Path
 from random import randint
 import traceback
 
-SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" #메인 시트
-#SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" #회사 내부용 시트
+#SHEET_ID_MASTER = "1-HB7z7TmWoBhXPCXjp32biuYKB4ITxQfwdhQ_dO52l4" #메인 시트
+SHEET_ID_MASTER = "18JG34ZOg1VyWeQQTz4vA3M9fh1GkjFBfD3xUfV9XBOM" #회사 내부용 시트
 
 STOCK_SHEET_CSV = (
     f"https://docs.google.com/spreadsheets/d/{SHEET_ID_MASTER}/export"
@@ -986,9 +986,10 @@ class OrderApp(QMainWindow):
             rows_3pl_file = [hed_3pl]
             rows_3pl_sheet = [hed_3pl + ["매입가"]]
 
+            # 주문서 헤더에 쿠팡발주번호 추가 (원하는 위치에 삽입)
             hed_ord = [
                 "바코드명", "바코드", "상품코드", "쿠팡납품센터명",
-                "쿠팡쉽먼트번호", "쿠팡입고예정일자", "입고마감준수여부",
+                "쿠팡쉽먼트번호", "쿠팡발주번호", "쿠팡입고예정일자", "입고마감준수여부",
                 "발주수량", "중국재고사용여부", "제조일자", "유통기한"
             ]
             rows_order = [hed_ord]
@@ -1057,9 +1058,25 @@ class OrderApp(QMainWindow):
 
                 mask = (df_confirm["Shipment"] == ship_no) & (df_confirm["상품바코드"] == bc)
                 po_no = product_code = ""
+                coupang_po_no = ""
                 if mask.any():
                     po_no = str(df_confirm.loc[mask, "발주번호"].iloc[0]).strip()
                     product_code = str(df_confirm.loc[mask, "상품번호"].iloc[0]).strip()
+
+                    # 발주서 파일에서 쿠팡발주번호(C10) 읽기
+                    if hasattr(self, "order_zip_path") and os.path.isdir(self.order_zip_path):
+                        for fname in os.listdir(self.order_zip_path):
+                            if fname.lower().endswith(('.xls', '.xlsx')):
+                                fpath = os.path.join(self.order_zip_path, fname)
+                                try:
+                                    wb = openpyxl.load_workbook(fpath, data_only=True)
+                                    ws = wb.active
+                                    c10_val = ws["C10"].value
+                                    if c10_val and str(c10_val).strip() == po_no:
+                                        coupang_po_no = str(c10_val).strip()
+                                        break
+                                except Exception:
+                                    continue
 
                 row_base = [brand, ship_no, po_no, product_code,
                             pname, bc, qty, eta_str, center, biz_num]
@@ -1098,8 +1115,9 @@ class OrderApp(QMainWindow):
                             exp_val = ""
                 # need > 0일 때만 주문서에 추가
                 if need > 0:
+                    # 주문서 row에 쿠팡발주번호 추가
                     row_ord = [pname, bc, product_code, center,
-                            ship_no, eta_str, "Y", need, "N", mfg_val, exp_val]
+                            ship_no, coupang_po_no, eta_str, "Y", need, "N", mfg_val, exp_val]
                     rows_order.append(row_ord)
                     ws_ord.append(row_ord)
 
